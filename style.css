@@ -53,16 +53,17 @@ nav {
 }
 
 ul {
-    padding-top: 16px;
     padding-right: 32px;
     display: flex;
+    flex-wrap: wrap;
     list-style-type: none;
 }
 
 li {
-    padding: 0px 16px;
+    
+    padding: 4px 16px;
     background-color: black;
-    margin: 0px 16px;
+    margin: 16px 16px;
 }
 
 .header-image {
@@ -114,9 +115,37 @@ main {
 
 
 .portfolio {
+    
     display: flex;
     flex-direction: column;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 1024px;
+
+}
+
+
+.illustration {
+    
+    flex: 1 1 auto;
+    display: flex;
     justify-content: center;
 }
 
+.illustration img {
+    padding: 2px;
+    display: block;
+    width: 100%;
+    height: auto;
+    max-width: 1024px;
+}
+
+
+.description {
+    
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 600px;
+    padding: 16px;
+}
 

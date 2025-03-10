@@ -46,9 +46,9 @@ header {
 }
 
 .header-signature img {
-    margin-left: 80px;
-    margin-top: 20px;
-    transform: scale(0.7);
+    margin-left: 83px;
+    margin-top: 19px;
+    transform: scale(0.73);
 }
 
 
@@ -147,7 +147,7 @@ main {
 }
 
 .illustration img {
-    padding: 2px;
+    margin-top: 2px;
     display: block;
     width: 100%;
     height: auto;

@@ -45,6 +45,20 @@ header {
     width: 100%;
 }
 
+.header-signature img {
+    margin-left: 80px;
+    margin-top: 20px;
+    transform: scale(0.7);
+}
+
+
+.header-signature {
+    display: flex;
+    position: absolute;
+    /* background-color: brown; */
+}
+
+
 nav {
     display: flex;
     position: absolute;

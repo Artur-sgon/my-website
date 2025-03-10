@@ -3,6 +3,11 @@ class WebsiteHeader extends HTMLElement {
         this.innerHTML = `
         
         <header>
+            <div class="header-signature">
+                <a href="index.html">
+                    <img src="artur-home-signature-crop.png">
+                </a>
+            </div>
             <nav>
                 <ul>
                     <li><a href="index.html">home</a></li>
@@ -11,8 +16,7 @@ class WebsiteHeader extends HTMLElement {
                     <li><a href="shop.html">shop</a></li>
                 </ul>
             </nav>
-            
-            <img class="header-image" src="./artur-home-header-3.png" alt="">
+            <img class="header-image" src="./artur-home-header-2.png" alt="">
         </header>
             
         `

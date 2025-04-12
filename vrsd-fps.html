@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D First Person Environment</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            touch-action: none;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            z-index: 100;
+        }
+        #canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+            z-index: 100;
+        }
+        /* Mobile Controls */
+        .joystick {
+            position: fixed;
+            width: 120px;
+            height: 120px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            touch-action: none;
+            display: none;
+        }
+        #joystick-left {
+            bottom: 30px;
+            left: 30px;
+        }
+        #joystick-right {
+            bottom: 30px;
+            right: 30px;
+        }
+        #jump-button {
+            position: fixed;
+            bottom: 30px;
+            right: 160px; /* Changed from left:140px to right:20px */
+            font-size: 24px;
+            background: rgba(0, 255, 0, 0.5);
+            padding: 15px 25px;
+            border-radius: 10px;
+            touch-action: none;
+            display: none;
+        }
+        /* Removed #shoot-button styles */
+        @media (max-width: 768px) {
+            #info {
+                font-size: 12px;
+            }
+            .joystick, #jump-button {
+                display: block;
+            }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        WASD to move, Mouse to look around, SPACE to jump. Click to start.<br>
+        Press ESC to unlock mouse cursor.
+    </div>
+    <div id="loading">Loading 3D Environment...</div>
+    
+    <!-- Mobile Controls -->
+    <div id="joystick-left" class="joystick"></div>
+    <div id="joystick-right" class="joystick"></div>
+    <div id="jump-button">↑</div>
+    <!-- Removed shoot-button div -->
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/OBJLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/FBXLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <script>
+        // Initial setup
+        const canvas = document.getElementById('canvas');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x89CFF0);
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ 
+            canvas, 
+            antialias: true,
+            powerPreference: "high-performance"
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
+        // Enhanced Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(-5, 60, 100);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+
+        // Sun sphere
+        const sunGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+        const sunMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xffff00,
+            transparent: true,
+            opacity: 0.8
+        });
+        const sunSphere = new THREE.Mesh(sunGeometry, sunMaterial);
+        sunSphere.position.copy(directionalLight.position);
+        scene.add(sunSphere);
+        directionalLight.add(sunSphere);
+
+        const hemisphereLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.4);
+        scene.add(hemisphereLight);
+
+        // Create a gradient sky
+        const createSkyGradient = () => {
+            const vertexShader = `
+                varying vec3 vWorldPosition;
+                void main() {
+                    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                    vWorldPosition = worldPosition.xyz;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `;
+            
+            const fragmentShader = `
+                uniform vec3 topColor;
+                uniform vec3 bottomColor;
+                uniform float offset;
+                uniform float exponent;
+                varying vec3 vWorldPosition;
+                void main() {
+                    float h = normalize(vWorldPosition + offset).y;
+                    gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0), 1.0);
+                }
+            `;
+            
+            const uniforms = {
+                topColor: { value: new THREE.Color(0x0077ff) },
+                bottomColor: { value: new THREE.Color(0x89CFF0) },
+                offset: { value: 33 },
+                exponent: { value: 0.6 }
+            };
+            
+            const skyGeo = new THREE.SphereGeometry(400, 32, 15);
+            const skyMat = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                side: THREE.BackSide
+            });
+            
+            return new THREE.Mesh(skyGeo, skyMat);
+        };
+        
+        const sky = createSkyGradient();
+        scene.add(sky);
+        
+        // DEBUG: Add a test cube (remove after testing)
+        const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const cubeMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x00ff00,
+            roughness: 0.1,
+            metalness: 0.5
+        });
+        const testCube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+        testCube.position.set(0, 0.5, -5);
+        testCube.castShadow = true;
+        testCube.receiveShadow = true;
+        scene.add(testCube);
+        
+        // Create collision detection raycaster
+        const raycaster = new THREE.Raycaster();
+        let collisionObjects = [testCube];
+        
+        // Player setup with improved jump parameters
+        const player = {
+            height: 1.8,
+            speed: 0.15,
+            turnSpeed: 0.002,
+            jumpForce: 0.4,
+            velocity: new THREE.Vector3(),
+            direction: new THREE.Vector3(),
+            gravity: -0.02,
+            groundCheckDistance: 0.25,
+            canJump: true,
+            isGrounded: false,
+            jumpCooldown: false,
+            keys: {
+                forward: false,
+                backward: false,
+                left: false,
+                right: false,
+                jump: false
+            },
+            mouse: {
+                x: 0,
+                y: 0
+            },
+            euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            lockControls: false,
+            touch: {
+                leftStick: { x: 0, y: 0 },
+                rightStick: { x: 0, y: 0 },
+                isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+                jumpPressed: false
+            }
+        };
+        
+        // Set initial camera position
+        camera.position.set(136, -6, -15);
+        
+        // 3D Model Loader
+        const loadingManager = new THREE.LoadingManager();
+        loadingManager.onLoad = function() {
+            document.getElementById('loading').style.display = 'none';
+            console.log("Model loaded successfully!");
+        };
+        
+        loadingManager.onProgress = function(url, loaded, total) {
+            const loadingElement = document.getElementById('loading');
+            loadingElement.textContent = `Loading: ${Math.round(loaded / total * 100)}%`;
+        };
+        
+        loadingManager.onError = function(url) {
+            console.error('Error loading:', url);
+            const loadingElement = document.getElementById('loading');
+            loadingElement.textContent = 'Error loading 3D model. Check console for details.';
+            loadingElement.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
+        };
+        
+        // Function to load different model formats
+        function loadModel(modelPath) {
+            const extension = modelPath.split('.').pop().toLowerCase();
+            let loader;
+            
+            if (extension === 'glb' || extension === 'gltf') {
+                loader = new THREE.GLTFLoader(loadingManager);
+                const dracoLoader = new THREE.DRACOLoader();
+                dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+                loader.setDRACOLoader(dracoLoader);
+            } else if (extension === 'obj') {
+                loader = new THREE.OBJLoader(loadingManager);
+            } else if (extension === 'fbx') {
+                loader = new THREE.FBXLoader(loadingManager);
+            } else {
+                console.error('Unsupported model format:', extension);
+                document.getElementById('loading').textContent = 'Unsupported model format: ' + extension;
+                return;
+            }
+            
+            loader.load(
+                modelPath,
+                function(object) {
+                    let model;
+                    if (extension === 'glb' || extension === 'gltf') {
+                        model = object.scene;
+                        
+                        // Auto-scale the model
+                        const box = new THREE.Box3().setFromObject(model);
+                        const size = box.getSize(new THREE.Vector3());
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        const scale = 5 / maxDim;
+                        model.scale.set(1.1, 1.1, 1.1);
+                        
+                        // Center the model
+                        const center = box.getCenter(new THREE.Vector3());
+                        model.position.x += (model.position.x - center.x);
+                        model.position.y += (model.position.y - center.y);
+                        model.position.z += (model.position.z - center.z);
+                    } else {
+                        model = object;
+                    }
+                    
+                    model.traverse(function(child) {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            collisionObjects.push(child);
+                        }
+                    });
+                    
+                    scene.add(model);
+                    
+                    // Remove test cube after model loads
+                    scene.remove(testCube);
+                    collisionObjects = collisionObjects.filter(obj => obj !== testCube);
+                },
+                function(xhr) {
+                    console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                },
+                function(error) {
+                    console.error('Error loading model:', error);
+                    document.getElementById('loading').textContent = 'Error loading model: ' + error.message;
+                    document.getElementById('loading').style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
+                }
+            );
+        }
+        
+        // Load your model
+        loadModel('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/santos_dumont_merged_clube.gltf');
+        
+        // =============================================
+        // Mobile Controls Setup
+        // =============================================
+        const joystickLeft = document.getElementById('joystick-left');
+        const joystickRight = document.getElementById('joystick-right');
+        const jumpButton = document.getElementById('jump-button');
+        
+        // Initialize touch controls if mobile
+        if (player.touch.isMobile) {
+            setupJoystick(joystickLeft, (x, y) => {
+                player.touch.leftStick.x = x;
+                player.touch.leftStick.y = y;
+            });
+            
+            setupJoystick(joystickRight, (x, y) => {
+                player.touch.rightStick.x = x * 0.02;
+                player.touch.rightStick.y = y * 0.02;
+            });
+            
+            jumpButton.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                player.touch.jumpPressed = true;
+            });
+            
+            jumpButton.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                player.touch.jumpPressed = false;
+            });
+            
+            document.getElementById('info').style.display = 'none';
+        }
+        
+        // Joystick Helper Function
+        function setupJoystick(element, callback) {
+            let touchId = null;
+            const rect = element.getBoundingClientRect();
+            const center = { x: rect.width / 2, y: rect.height / 2 };
+            const maxDist = center.x * 0.7;
+            
+            element.addEventListener('touchstart', (e) => {
+                if (touchId === null) {
+                    touchId = e.changedTouches[0].identifier;
+                    e.preventDefault();
+                }
+            });
+            
+            element.addEventListener('touchmove', (e) => {
+                for (let touch of e.changedTouches) {
+                    if (touch.identifier === touchId) {
+                        let x = (touch.clientX - rect.left - center.x) / maxDist;
+                        let y = (touch.clientY - rect.top - center.y) / maxDist;
+                        
+                        x = Math.max(-1, Math.min(1, x));
+                        y = Math.max(-1, Math.min(1, y));
+                        
+                        callback(x, y);
+                        e.preventDefault();
+                    }
+                }
+            });
+            
+            element.addEventListener('touchend', (e) => {
+                for (let touch of e.changedTouches) {
+                    if (touch.identifier === touchId) {
+                        callback(0, 0);
+                        touchId = null;
+                        e.preventDefault();
+                    }
+                }
+            });
+        }
+        
+        // =============================================
+        // Enhanced Collision Detection
+        // =============================================
+        function checkCollisions(moveX, moveZ) {
+            // Check from multiple points around player
+            const checkPoints = [
+                new THREE.Vector3(0.3, 0, 0.3),   // Front-right
+                new THREE.Vector3(-0.3, 0, 0.3),  // Front-left
+                new THREE.Vector3(0.3, 0, -0.3),  // Back-right
+                new THREE.Vector3(-0.3, 0, -0.3), // Back-left
+                new THREE.Vector3(0, 0, 0)        // Center
+            ];
+
+            let canMove = true;
+
+            // Check movement collisions from all points
+            checkPoints.forEach(point => {
+                const origin = new THREE.Vector3().copy(camera.position);
+                origin.add(point);
+                
+                // Check forward/backward movement
+                if (moveZ !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(0, 0, moveZ > 0 ? 1 : -1);
+                    const intersects = raycaster.intersectObjects(collisionObjects);
+                    if (intersects.length > 0 && intersects[0].distance < 0.5) {
+                        canMove = false;
+                    }
+                }
+
+                // Check left/right movement
+                if (moveX !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(moveX > 0 ? 1 : -1, 0, 0);
+                    const intersects = raycaster.intersectObjects(collisionObjects);
+                    if (intersects.length > 0 && intersects[0].distance < 0.5) {
+                        canMove = false;
+                    }
+                }
+            });
+
+            return canMove;
+        }
+
+        // =============================================
+        // Event listeners for controls
+        // =============================================
+        document.addEventListener('keydown', (event) => {
+            switch (event.code) {
+                case 'KeyW': player.keys.forward = true; break;
+                case 'KeyS': player.keys.backward = true; break;
+                case 'KeyA': player.keys.left = true; break;
+                case 'KeyD': player.keys.right = true; break;
+                case 'Space': 
+                    player.keys.jump = true;
+                    break;
+            }
+        });
+        
+        document.addEventListener('keyup', (event) => {
+            switch (event.code) {
+                case 'KeyW': player.keys.forward = false; break;
+                case 'KeyS': player.keys.backward = false; break;
+                case 'KeyA': player.keys.left = false; break;
+                case 'KeyD': player.keys.right = false; break;
+                case 'Space': 
+                    player.keys.jump = false;
+                    break;
+                case 'Escape':
+                    player.lockControls = false;
+                    document.exitPointerLock();
+                    break;
+            }
+        });
+        
+        canvas.addEventListener('click', () => {
+            if (!player.lockControls && !player.touch.isMobile) {
+                canvas.requestPointerLock = canvas.requestPointerLock || 
+                                         canvas.mozRequestPointerLock || 
+                                         canvas.webkitRequestPointerLock;
+                canvas.requestPointerLock().catch(err => {
+                    console.error("Error locking pointer:", err);
+                });
+            }
+        });
+        
+        document.addEventListener('pointerlockchange', () => {
+            player.lockControls = document.pointerLockElement === canvas;
+        });
+        
+        document.addEventListener('mousemove', (event) => {
+            if (player.lockControls && !player.touch.isMobile) {
+                const movementX = event.movementX || 0;
+                const movementY = event.movementY || 0;
+                
+                player.euler.y -= movementX * player.turnSpeed;
+                player.euler.x -= movementY * player.turnSpeed;
+                
+                player.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.euler.x));
+                
+                camera.quaternion.setFromEuler(player.euler);
+            }
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Animation loop with improved jump physics
+        const animate = () => {
+            requestAnimationFrame(animate);
+            
+            // Enhanced ground detection
+            raycaster.ray.origin.copy(camera.position);
+            raycaster.ray.direction.set(0, -1, 0);
+            const groundIntersects = raycaster.intersectObjects(collisionObjects);
+            
+            player.isGrounded = false;
+            if (groundIntersects.length > 0) {
+                const groundDistance = groundIntersects[0].distance;
+                player.isGrounded = groundDistance < player.height + player.groundCheckDistance;
+                
+                // Snap to ground when landing
+                if (player.isGrounded && player.velocity.y <= 0) {
+                    camera.position.y = groundIntersects[0].point.y + player.height;
+                    player.velocity.y = 0;
+                    player.jumpCooldown = false;
+                }
+            }
+
+            // Apply gravity if not grounded
+            if (!player.isGrounded) {
+                player.velocity.y += player.gravity;
+                // Limit fall speed
+                player.velocity.y = Math.max(player.velocity.y, -0.5);
+            } else if (player.velocity.y < 0) {
+                player.velocity.y = 0;
+            }
+
+            // Handle jumping - both keyboard and mobile
+            if ((player.keys.jump || player.touch.jumpPressed) && 
+                player.isGrounded && 
+                !player.jumpCooldown) {
+                player.velocity.y = player.jumpForce;
+                player.isGrounded = false;
+                player.jumpCooldown = true;
+                setTimeout(() => player.jumpCooldown = false, 100);
+            }
+
+            // Movement handling
+            if (player.lockControls || player.touch.isMobile) {
+                let moveX = 0;
+                let moveZ = 0;
+                
+                // Calculate movement direction
+                if (player.touch.isMobile) {
+                    moveZ = -player.touch.leftStick.y * player.speed;
+                    moveX = player.touch.leftStick.x * player.speed;
+                } else {
+                    moveZ = (Number(player.keys.forward) - Number(player.keys.backward)) * player.speed;
+                    moveX = (Number(player.keys.right) - Number(player.keys.left)) * player.speed;
+                }
+
+                // Only move if collision check passes
+                if (checkCollisions(moveX, moveZ)) {
+                    const cameraDirection = new THREE.Vector3();
+                    camera.getWorldDirection(cameraDirection);
+                    cameraDirection.y = 0;
+                    cameraDirection.normalize();
+                    
+                    const sideways = new THREE.Vector3(-cameraDirection.z, 0, cameraDirection.x);
+                    
+                    camera.position.x += moveX * sideways.x + moveZ * cameraDirection.x;
+                    camera.position.z += moveX * sideways.z + moveZ * cameraDirection.z;
+                }
+
+                // Handle camera rotation
+                if (player.touch.isMobile) {
+                    if (Math.abs(player.touch.rightStick.x) > 0.01 || Math.abs(player.touch.rightStick.y) > 0.01) {
+                        player.euler.y -= player.touch.rightStick.x;
+                        player.euler.x -= player.touch.rightStick.y;
+                        player.euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.euler.x));
+                        camera.quaternion.setFromEuler(player.euler);
+                    }
+                }
+            }
+            
+            // Apply vertical movement (jumping/falling)
+            camera.position.y += player.velocity.y;
+            
+            renderer.render(scene, camera);
+        };
+        
+        animate();
+    </script>
+</body>
+</html>

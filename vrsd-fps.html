@@ -19,7 +19,7 @@
             color: white;
             background-color: rgba(0, 0, 0, 0.5);
             padding: 5px;
-            z-index: 100;
+            z-index: 99;
         }
         #canvas {
             position: fixed;
@@ -61,7 +61,7 @@
         #jump-button {
             position: fixed;
             bottom: 30px;
-            right: 160px; /* Changed from left:140px to right:20px */
+            right: 160px;
             font-size: 24px;
             background: rgba(0, 255, 0, 0.5);
             padding: 15px 25px;
@@ -69,7 +69,6 @@
             touch-action: none;
             display: none;
         }
-        /* Removed #shoot-button styles */
         @media (max-width: 768px) {
             #info {
                 font-size: 12px;
@@ -83,7 +82,7 @@
 <body>
     <canvas id="canvas"></canvas>
     <div id="info">
-        WASD to move, Mouse to look around, SPACE to jump. Click to start.<br>
+        WASD to move, Mouse to look around, SPACE to jump, R to toggle run. Click to start.<br>
         Press ESC to unlock mouse cursor.
     </div>
     <div id="loading">Loading 3D Environment...</div>
@@ -92,14 +91,23 @@
     <div id="joystick-left" class="joystick"></div>
     <div id="joystick-right" class="joystick"></div>
     <div id="jump-button">↑</div>
-    <!-- Removed shoot-button div -->
     
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <!-- Load scripts in correct order -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/OBJLoader.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/FBXLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/shaders/SAOShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/shaders/DepthLimitedBlurShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/shaders/UnpackDepthRGBAShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/postprocessing/SAOPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r132/loaders/OBJLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r132/loaders/FBXLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+
     <script>
         // Initial setup
         const canvas = document.getElementById('canvas');
@@ -111,26 +119,122 @@
             antialias: true,
             powerPreference: "high-performance"
         });
+        
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // For softer shadows
+        renderer.shadowMap.autoUpdate = true;
+
+
+        // Post-processing variables
+        let composer = null;
+        let saoPass = null;
+        let renderPass = null;
+        let aoMultiplyPass = null;
+        
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         
+        // Custom AO Multiply Shader
+        const CustomAOMultiplyShader = {
+            uniforms: {
+                "tDiffuse": { value: null },
+                "tAO": { value: null },
+                "opacity": { value: 1.0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform sampler2D tAO;
+                uniform float opacity;
+                varying vec2 vUv;
+                
+                void main() {
+                    vec4 texel = texture2D(tDiffuse, vUv);
+                    vec4 ao = texture2D(tAO, vUv);
+                    
+                    // Multiply AO with the diffuse color
+                    gl_FragColor = vec4(texel.rgb * ao.rgb, texel.a);
+                }
+            `
+        };
+        
+        // Initialize post-processing
+        function initPostProcessing() {
+            console.log("Initializing post-processing...");
+            
+            // Create render target with proper parameters
+            const renderTarget = new THREE.WebGLRenderTarget(
+                window.innerWidth, 
+                window.innerHeight,
+                {
+                    minFilter: THREE.LinearFilter,
+                    magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat,
+                    encoding: THREE.sRGBEncoding
+                }
+            );
+            
+            // Initialize composer with render target
+            composer = new THREE.EffectComposer(renderer, renderTarget);
+            
+            // First pass: render the scene normally
+            renderPass = new THREE.RenderPass(scene, camera);
+            composer.addPass(renderPass);
+            
+            // SAO Pass with optimized settings
+            saoPass = new THREE.SAOPass(scene, camera, false, true);
+            saoPass.params = {
+                saoBias: 0.5,
+                saoIntensity: 0.001,
+                saoScale: 3,
+                saoKernelRadius: 20,
+                saoMinResolution: 0,
+                saoBlur: true,
+                saoBlurRadius: 6,
+                saoBlurStdDev: 1,
+                saoBlurDepthCutoff: 0.01
+            };
+            
+            composer.addPass(saoPass);
+            
+            // Create our custom AO multiply pass
+            aoMultiplyPass = new THREE.ShaderPass(CustomAOMultiplyShader);
+            aoMultiplyPass.renderToScreen = true;
+            composer.addPass(aoMultiplyPass);
+            
+            console.log("Post-processing initialized with AO multiplication");
+            
+            // Temporary debug GUI
+            const gui = new dat.GUI();
+            gui.add(saoPass.params, 'saoIntensity', 0, 1).name('AO Intensity');
+            gui.add(saoPass.params, 'saoKernelRadius', 10, 200).name('AO Radius');
+            gui.add(saoPass.params, 'saoScale', 0.1, 2).name('AO Scale');
+        }
+        
         // Enhanced Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
         scene.add(ambientLight);
         
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        directionalLight.position.set(-5, 60, 100);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        directionalLight.position.set(-80, 90, -40);
         directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.mapSize.width = 4096;
+        directionalLight.shadow.mapSize.height = 4096;
         directionalLight.shadow.camera.near = 0.5;
-        directionalLight.shadow.camera.far = 50;
-        directionalLight.shadow.camera.left = -20;
-        directionalLight.shadow.camera.right = 20;
-        directionalLight.shadow.camera.top = 20;
-        directionalLight.shadow.camera.bottom = -20;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.left = -200;
+        directionalLight.shadow.camera.right = 200;
+        directionalLight.shadow.camera.top = 200;
+        directionalLight.shadow.camera.bottom = -200;
+        directionalLight.shadow.bias = -0.001;         // Added to reduce shadow acne
         scene.add(directionalLight);
 
         // Sun sphere
@@ -145,7 +249,7 @@
         scene.add(sunSphere);
         directionalLight.add(sunSphere);
 
-        const hemisphereLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.4);
+        const hemisphereLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.2);
         scene.add(hemisphereLight);
 
         // Create a gradient sky
@@ -167,7 +271,7 @@
                 varying vec3 vWorldPosition;
                 void main() {
                     float h = normalize(vWorldPosition + offset).y;
-                    gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0), 1.0);
+                    gl_FragColor = vec4(mix(bottomColor, topColor, pow(max(h, 0.0), exponent)), 1.0);
                 }
             `;
             
@@ -215,6 +319,8 @@
             speed: 0.15,
             turnSpeed: 0.002,
             jumpForce: 0.4,
+            jumpCount: 0,
+            maxJumps: 2,
             velocity: new THREE.Vector3(),
             direction: new THREE.Vector3(),
             gravity: -0.02,
@@ -222,6 +328,9 @@
             canJump: true,
             isGrounded: false,
             jumpCooldown: false,
+            isRunning: false,
+            walkSpeed: 0.15,
+            runSpeed: 0.3,
             keys: {
                 forward: false,
                 backward: false,
@@ -251,6 +360,7 @@
         loadingManager.onLoad = function() {
             document.getElementById('loading').style.display = 'none';
             console.log("Model loaded successfully!");
+            initPostProcessing(); // Initialize post-processing after model loads
         };
         
         loadingManager.onProgress = function(url, loaded, total) {
@@ -310,8 +420,16 @@
                     
                     model.traverse(function(child) {
                         if (child.isMesh) {
+                            child.material.aoMapIntensity = 1;  // Enable AO intensity
                             child.castShadow = true;
                             child.receiveShadow = true;
+
+                            // Add these material properties for better shadow rendering
+                            if (child.material instanceof THREE.MeshStandardMaterial) {
+                                child.material.roughness = 0.5;
+                                child.material.metalness = 0.1;
+                            }
+
                             collisionObjects.push(child);
                         }
                     });
@@ -334,7 +452,7 @@
         }
         
         // Load your model
-        loadModel('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/santos_dumont_merged_clube_v2.gltf');
+        loadModel('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/santos_dumont_merged_clube_v3.gltf');
         
         // =============================================
         // Mobile Controls Setup
@@ -461,6 +579,7 @@
                 case 'KeyS': player.keys.backward = true; break;
                 case 'KeyA': player.keys.left = true; break;
                 case 'KeyD': player.keys.right = true; break;
+                case 'KeyR': player.isRunning = !player.isRunning; break;
                 case 'Space': 
                     player.keys.jump = true;
                     break;
@@ -517,6 +636,12 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            if (composer) {
+                composer.setSize(window.innerWidth, window.innerHeight);
+                if (composer.renderTarget) {
+                    composer.renderTarget.setSize(window.innerWidth, window.innerHeight);
+                }
+            }
         });
         
         // Animation loop with improved jump physics
@@ -552,12 +677,19 @@
 
             // Handle jumping - both keyboard and mobile
             if ((player.keys.jump || player.touch.jumpPressed) && 
-                player.isGrounded && 
+                (player.isGrounded || player.jumpCount < player.maxJumps) && 
                 !player.jumpCooldown) {
+
                 player.velocity.y = player.jumpForce;
+                player.jumpCount++;
                 player.isGrounded = false;
                 player.jumpCooldown = true;
                 setTimeout(() => player.jumpCooldown = false, 100);
+            }
+
+            // Reset jump count when grounded
+            if (player.isGrounded) {
+                player.jumpCount = 0;
             }
 
             // Movement handling
@@ -566,12 +698,14 @@
                 let moveZ = 0;
                 
                 // Calculate movement direction
+                const currentSpeed = player.isRunning ? player.runSpeed : player.walkSpeed;
+
                 if (player.touch.isMobile) {
-                    moveZ = -player.touch.leftStick.y * player.speed;
-                    moveX = player.touch.leftStick.x * player.speed;
+                    moveZ = -player.touch.leftStick.y * currentSpeed;
+                    moveX = player.touch.leftStick.x * currentSpeed;
                 } else {
-                    moveZ = (Number(player.keys.forward) - Number(player.keys.backward)) * player.speed;
-                    moveX = (Number(player.keys.right) - Number(player.keys.left)) * player.speed;
+                    moveZ = (Number(player.keys.forward) - Number(player.keys.backward)) * currentSpeed;
+                    moveX = (Number(player.keys.right) - Number(player.keys.left)) * currentSpeed;
                 }
 
                 // Only move if collision check passes
@@ -601,7 +735,16 @@
             // Apply vertical movement (jumping/falling)
             camera.position.y += player.velocity.y;
             
-            renderer.render(scene, camera);
+            // Render with post-processing
+            if (composer) {
+                // Update the AO texture reference in case it changed
+                if (aoMultiplyPass && saoPass) {
+                    aoMultiplyPass.uniforms["tAO"].value = saoPass.beautyRenderTarget.texture;
+                }
+                composer.render();
+            } else {
+                renderer.render(scene, camera);
+            }
         };
         
         animate();

@@ -112,7 +112,6 @@
         // Initial setup
         const canvas = document.getElementById('canvas');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x89CFF0);
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ 
             canvas, 
@@ -123,7 +122,6 @@
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap; // For softer shadows
         renderer.shadowMap.autoUpdate = true;
-
 
         // Post-processing variables
         let composer = null;
@@ -220,11 +218,11 @@
         }
         
         // Enhanced Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2);
         scene.add(ambientLight);
         
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
-        directionalLight.position.set(-80, 90, -40);
+        const directionalLight = new THREE.DirectionalLight(0xffff86, 0.7);
+        directionalLight.position.set(70, 70, -20);
         directionalLight.castShadow = true;
         directionalLight.shadow.mapSize.width = 4096;
         directionalLight.shadow.mapSize.height = 4096;
@@ -249,52 +247,42 @@
         scene.add(sunSphere);
         directionalLight.add(sunSphere);
 
-        const hemisphereLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.2);
+        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2);
         scene.add(hemisphereLight);
 
-        // Create a gradient sky
-        const createSkyGradient = () => {
-            const vertexShader = `
-                varying vec3 vWorldPosition;
-                void main() {
-                    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-                    vWorldPosition = worldPosition.xyz;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `;
-            
-            const fragmentShader = `
-                uniform vec3 topColor;
-                uniform vec3 bottomColor;
-                uniform float offset;
-                uniform float exponent;
-                varying vec3 vWorldPosition;
-                void main() {
-                    float h = normalize(vWorldPosition + offset).y;
-                    gl_FragColor = vec4(mix(bottomColor, topColor, pow(max(h, 0.0), exponent)), 1.0);
-                }
-            `;
-            
-            const uniforms = {
-                topColor: { value: new THREE.Color(0x0077ff) },
-                bottomColor: { value: new THREE.Color(0x89CFF0) },
-                offset: { value: 33 },
-                exponent: { value: 0.6 }
-            };
-            
-            const skyGeo = new THREE.SphereGeometry(400, 32, 15);
-            const skyMat = new THREE.ShaderMaterial({
-                uniforms: uniforms,
-                vertexShader: vertexShader,
-                fragmentShader: fragmentShader,
-                side: THREE.BackSide
-            });
-            
-            return new THREE.Mesh(skyGeo, skyMat);
-        };
+        // Create skybox with equirectangular texture
+        const loader = new THREE.TextureLoader();
+        const skyTextureUrl = 'https://i.imgur.com/WN0Wmas.jpeg';
         
-        const sky = createSkyGradient();
-        scene.add(sky);
+        loader.load(
+            skyTextureUrl,
+            function(texture) {
+                // Remove loading message
+                document.getElementById('loading').textContent = 'Loading 3D model...';
+                
+                // Create skybox material
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+
+                texture.center.set(0.5, 0.5); // Set rotation center to middle of texture
+                texture.rotation = Math.PI * 1.5; // Rotate 90 degrees (adjust as needed) 
+
+                scene.background = texture;
+                scene.environment = texture;
+                
+                // Adjust scene lighting to match the sky
+                // ambientLight.intensity = 0.2;
+                // directionalLight.intensity = 0.5;
+                // hemisphereLight.intensity = 0.1;
+            },
+            undefined,
+            function(error) {
+                console.error('Error loading sky texture:', error);
+                document.getElementById('loading').textContent = 'Error loading sky texture. Using fallback.';
+                
+                // Fallback to simple blue sky
+                scene.background = new THREE.Color(0x89CFF0);
+            }
+        );
         
         // DEBUG: Add a test cube (remove after testing)
         const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -318,7 +306,7 @@
             height: 1.8,
             speed: 0.15,
             turnSpeed: 0.002,
-            jumpForce: 0.4,
+            jumpForce: 0.5,
             jumpCount: 0,
             maxJumps: 2,
             velocity: new THREE.Vector3(),

@@ -6,12 +6,12 @@
     <title>LUNARI CIPHER v1.0</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Noto+Sans+Symbols:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary-color: #00ff00; /* Bright green */
-            --bg-color: #000000; /* Pure black */
-            --text-shadow: 0 0 5px rgba(0, 255, 0, 0.7); /* Glow effect */
+            --primary-color: #00ff00;
+            --bg-color: #000000;
+            --text-shadow: 0 0 5px rgba(0, 255, 0, 0.7);
         }
 
         body {
@@ -92,8 +92,12 @@
             padding-bottom: 10px;
         }
 
-        .symbol {
-            font-family: 'Noto Sans Symbols', 'VT323', monospace;
+        /* Special character fallback */
+        .char-fallback {
+            font-family: Arial, sans-serif;
+            display: inline-block;
+            min-width: 1em;
+            text-align: center;
         }
     </style>
 </head>
@@ -123,20 +127,45 @@
     </div>
 
     <script>
+        // Enhanced character map with HTML entity fallbacks
         const lunariMap = {
-            'A': 'Æ', 'B': 'β', 'C': '¢', 'D': 'Ð', 'E': '€',
-            'F': 'ƒ', 'G': 'ɢ', 'H': 'Ħ', 'I': 'Ī', 'J': 'ʝ',
-            'K': 'Ҡ', 'L': 'Ł', 'M': 'ϻ', 'N': 'Ɲ', 'O': 'Ø',
-            'P': 'Þ', 'Q': 'Ҩ', 'R': 'Я', 'S': '§', 'T': 'Ŧ',
-            'U': 'Ʉ', 'V': 'Ʋ', 'W': 'Ш', 'X': 'Ж', 'Y': 'Ƴ',
+            'A': 'Æ',
+            'B': 'β',
+            'C': '¢',
+            'D': 'Ð',
+            'E': '€',
+            'F': 'ƒ',
+            'G': '<span class="char-fallback">ɢ</span>',
+            'H': 'Ħ',
+            'I': 'Ī',
+            'J': '<span class="char-fallback">ʝ</span>',
+            'K': 'Ҡ',
+            'L': 'Ł',
+            'M': '<span class="char-fallback">ϻ</span>',
+            'N': 'Ɲ',
+            'O': 'Ø',
+            'P': 'Þ',
+            'Q': 'Ҩ',
+            'R': 'Я',
+            'S': '§',
+            'T': 'Ŧ',
+            'U': '<span class="char-fallback">Ʉ</span>',
+            'V': 'Ʋ',
+            'W': 'Ш',
+            'X': 'Ж',
+            'Y': 'Ƴ',
             'Z': 'Ƶ'
         };
 
         // Reverse mapping for decoding
-        const reverseLunariMap = {};
-        for (const [key, value] of Object.entries(lunariMap)) {
-            reverseLunariMap[value] = key;
-        }
+        const reverseLunariMap = {
+            'Æ': 'A', 'β': 'B', '¢': 'C', 'Ð': 'D', '€': 'E',
+            'ƒ': 'F', 'ɢ': 'G', 'Ħ': 'H', 'Ī': 'I', 'ʝ': 'J',
+            'Ҡ': 'K', 'Ł': 'L', 'ϻ': 'M', 'Ɲ': 'N', 'Ø': 'O',
+            'Þ': 'P', 'Ҩ': 'Q', 'Я': 'R', '§': 'S', 'Ŧ': 'T',
+            'Ʉ': 'U', 'Ʋ': 'V', 'Ш': 'W', 'Ж': 'X', 'Ƴ': 'Y',
+            'Ƶ': 'Z'
+        };
 
         function encodeText() {
             const input = document.getElementById('inputText').value;
@@ -145,8 +174,7 @@
             let encodedChars = [];
             
             for (const char of reversedText) {
-                const symbol = lunariMap[char] || char;
-                encodedChars.push(`<span class="symbol">${symbol}</span>`);
+                encodedChars.push(lunariMap[char] || char);
             }
             
             const result = encodedChars.join('•');
@@ -160,9 +188,9 @@
             let decodedChars = [];
             
             for (const char of chars) {
-                // Handle both wrapped symbols and plain characters
-                const rawChar = char.replace(/<[^>]*>/g, '');
-                decodedChars.push(reverseLunariMap[rawChar] || rawChar);
+                // Extract text content if it's HTML
+                const textContent = char.replace(/<[^>]*>/g, '');
+                decodedChars.push(reverseLunariMap[textContent] || textContent);
             }
             
             const decodedText = decodedChars.join('').split('').reverse().join('');

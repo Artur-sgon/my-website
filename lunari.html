@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LUNARI CIPHER v1.0</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">  
+    <style>
+        :root {
+            --primary-color: #00ff00; /* Bright green */
+            --bg-color: #000000; /* Pure black */
+            --text-shadow: 0 0 5px rgba(0, 255, 0, 0.7); /* Glow effect */
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--primary-color);
+            font-family: 'Press Start 2P', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            margin: 0;
+            padding: 20px;
+            text-shadow: var(--text-shadow);
+        }
+
+        .terminal {
+            border: 2px solid var(--primary-color);
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            position: relative;
+        }
+
+        .terminal::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                repeating-linear-gradient(
+                    0deg,
+                    rgba(0, 255, 0, 0.05),
+                    rgba(0, 255, 0, 0.05) 1px,
+                    transparent 1px,
+                    transparent 2px
+                );
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        textarea, #result {
+            background-color: transparent;
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            font-family: 'Press Start 2P', monospace;
+            font-size: 18px;
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            resize: none;
+        }
+
+        textarea:focus {
+            outline: none;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+        }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            font-family: 'Press Start 2P', monospace;
+            font-size: 12px;
+            padding: 8px 15px;
+            margin-right: 10px;
+            cursor: pointer;
+            text-shadow: var(--text-shadow);
+        }
+
+        button:hover {
+            background: rgba(0, 255, 0, 0.2);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 1px dashed var(--primary-color);
+            padding-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="terminal">
+        <div class="header">
+            <p>╔═════════════════════════════╗</p>
+            <p> LUNARI CIPHER TERMINAL v1.0 </p>
+            <p> (C) 2024 CRYPTIC SYSTEMS    </p>
+            <p>╚═════════════════════════════╝</p>
+        </div>
+
+        <p>> INPUT:</p>
+        <textarea 
+            id="inputText" 
+            spellcheck="false"
+            rows="5"
+            placeholder="> TYPE CLEARTEXT OR CIPHERTEXT HERE..."></textarea>
+
+        <div>
+            <button onclick="encodeText()">[F1] ENCODE</button>
+            <button onclick="decodeText()">[F2] DECODE</button>
+        </div>
+
+        <p>> OUTPUT:</p>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const lunariMap = {
+            'A': 'Æ', 'B': 'β', 'C': '¢', 'D': 'Ð', 'E': '€',
+            'F': 'ƒ', 'G': 'ɢ', 'H': 'Ħ', 'I': 'Ī', 'J': 'ʝ',
+            'K': 'Ҡ', 'L': 'Ł', 'M': 'ϻ', 'N': 'Ɲ', 'O': 'Ø',
+            'P': 'Þ', 'Q': 'Ҩ', 'R': 'Я', 'S': '§', 'T': 'Ŧ',
+            'U': 'Ʉ', 'V': 'Ʋ', 'W': 'Ш', 'X': 'Ж', 'Y': 'Ƴ',
+            'Z': 'Ƶ'
+        };
+
+        // Reverse mapping for decoding
+        const reverseLunariMap = {};
+        for (const [key, value] of Object.entries(lunariMap)) {
+            reverseLunariMap[value] = key;
+        }
+
+        function encodeText() {
+            const input = document.getElementById('inputText').value;
+            const processedText = input.toUpperCase().replace(/\s+/g, '');
+            const reversedText = processedText.split('').reverse().join('');
+            let encodedChars = [];
+            
+            for (const char of reversedText) {
+                encodedChars.push(lunariMap[char] || char);
+            }
+            
+            const result = encodedChars.join('•');
+            document.getElementById('result').innerHTML = 
+                `<p>> CIPHERTEXT GENERATED:</p><p style="word-break: break-all;">${result}</p>`;
+        }
+
+        function decodeText() {
+            const input = document.getElementById('inputText').value;
+            const chars = input.split('•');
+            let decodedChars = [];
+            
+            for (const char of chars) {
+                decodedChars.push(reverseLunariMap[char] || char);
+            }
+            
+            const decodedText = decodedChars.join('').split('').reverse().join('');
+            document.getElementById('result').innerHTML = 
+                `<p>> CLEARTEXT RECOVERED:</p><p>${decodedText}</p>`;
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F1') encodeText();
+            if (e.key === 'F2') decodeText();
+        });
+    </script>
+</body>
+</html>

@@ -6,7 +6,7 @@
     <title>LUNARI CIPHER v1.0</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Noto+Sans+Symbols:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary-color: #00ff00; /* Bright green */
@@ -91,6 +91,10 @@
             border-bottom: 1px dashed var(--primary-color);
             padding-bottom: 10px;
         }
+
+        .symbol {
+            font-family: 'Noto Sans Symbols', 'VT323', monospace;
+        }
     </style>
 </head>
 <body>
@@ -141,7 +145,8 @@
             let encodedChars = [];
             
             for (const char of reversedText) {
-                encodedChars.push(lunariMap[char] || char);
+                const symbol = lunariMap[char] || char;
+                encodedChars.push(`<span class="symbol">${symbol}</span>`);
             }
             
             const result = encodedChars.join('•');
@@ -155,7 +160,9 @@
             let decodedChars = [];
             
             for (const char of chars) {
-                decodedChars.push(reverseLunariMap[char] || char);
+                // Handle both wrapped symbols and plain characters
+                const rawChar = char.replace(/<[^>]*>/g, '');
+                decodedChars.push(reverseLunariMap[rawChar] || rawChar);
             }
             
             const decodedText = decodedChars.join('').split('').reverse().join('');

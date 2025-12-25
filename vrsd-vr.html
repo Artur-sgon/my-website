@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D VR Environment - Santos Dumont</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
+        #info {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: auto; min-width: 400px; text-align: center; color: white;
+            background-color: rgba(0, 0, 0, 0.7); padding: 10px 20px; z-index: 99;
+            border: 2px solid #555; font-size: 1.2rem;
+        }
+        #info.collapsed #info-text { display: none; }
+        #info.collapsed { min-width: 100px; padding: 5px; }
+        #info-toggle { background: #444; color: #fff; border: 1px solid #777; font-family: 'VT323', monospace; cursor: pointer; margin-top: 5px; padding: 2px 10px; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px; border-radius: 10px; font-size: 1.5rem; z-index: 100; }
+        
+        /* Joysticks & Buttons */
+        .joystick { position: fixed; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; touch-action: none; display: none; z-index: 10; }
+        #joystick-left { bottom: 30px; left: 30px; }
+        #joystick-right { bottom: 30px; right: 30px; }
+        #jump-button { position: fixed; bottom: 30px; right: 160px; font-size: 24px; background: rgba(0, 255, 0, 0.5); padding: 15px 25px; border-radius: 10px; touch-action: none; display: none; z-index: 10; }
+        @media (max-width: 768px) { .joystick, #jump-button { display: block; } #info { min-width: 90%; } }
+
+        /* Dat.GUI Pixel Font */
+        .dg.main, .dg .property-name, .dg .c, .dg .slider { font-family: 'VT323', monospace !important; font-size: 1.1rem !important; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <div id="info-text">
+            WASD/Quest Stick: Move | Mouse/Right Stick: Look | SPACE/Quest A: Jump<br>
+            Quest 2: Click "ENTER VR" below to start.
+        </div>
+        <button id="info-toggle">Close Controls</button>
+    </div>
+
+    <div id="loading">Loading 3D Environment...</div>
+    <div id="joystick-left" class="joystick"></div>
+    <div id="joystick-right" class="joystick"></div>
+    <div id="jump-button">↑</div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/webxr/VRButton.js"></script>
+
+    <script>
+        // UI Toggle
+        const infoBar = document.getElementById('info');
+        document.getElementById('info-toggle').addEventListener('click', (e) => {
+            e.stopPropagation();
+            infoBar.classList.toggle('collapsed');
+            document.getElementById('info-toggle').textContent = infoBar.classList.contains('collapsed') ? 'Show Controls' : 'Close Controls';
+        });
+
+        // Scene Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        // VR Player Group (Dolly)
+        const playerGroup = new THREE.Group();
+        playerGroup.position.set(155, 6, 8); // Your set position
+        playerGroup.add(camera);
+        scene.add(playerGroup);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        document.body.appendChild(VRButton.createButton(renderer));
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.3);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffff86, 0.8);
+        directionalLight.position.set(70, 70, -20);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.set(2048, 2048);
+        directionalLight.shadow.bias = -0.001;
+        scene.add(directionalLight);
+
+        // Sky
+        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (texture) => {
+            texture.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = texture;
+            scene.environment = texture;
+        });
+
+        // Player State
+        const player = {
+            height: 1.8,
+            speed: 0.15,
+            turnSpeed: 0.002,
+            velocity: new THREE.Vector3(),
+            gravity: -0.015,
+            isGrounded: false,
+            euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            keys: { forward: false, backward: false, left: false, right: false, jump: false },
+            touch: { l: {x:0, y:0}, r: {x:0, y:0}, jump: false },
+            xr: { snapTurnCooldown: false }
+        };
+
+        // Collision Logic
+        const raycaster = new THREE.Raycaster();
+        let collisionObjects = [];
+
+        function checkCollisions(moveX, moveZ) {
+            const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
+            let canMove = true;
+            
+            checkPoints.forEach(point => {
+                const origin = playerGroup.position.clone().add(point);
+                const moveVec = new THREE.Vector3(moveX, 0, moveZ).applyQuaternion(playerGroup.quaternion);
+                
+                if (moveVec.length() > 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.copy(moveVec.normalize());
+                    const intersects = raycaster.intersectObjects(collisionObjects);
+                    if (intersects.length > 0 && intersects[0].distance < 0.6) canMove = false;
+                }
+            });
+            return canMove;
+        }
+
+        // Model Loading
+        const loadingManager = new THREE.LoadingManager(() => {
+            document.getElementById('loading').style.display = 'none';
+        });
+        const loader = new THREE.GLTFLoader(loadingManager);
+        const dracoLoader = new THREE.DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(dracoLoader);
+        
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(1.1, 1.1, 1.1);
+            model.traverse(n => {
+                if(n.isMesh) {
+                    n.castShadow = true; n.receiveShadow = true;
+                    collisionObjects.push(n);
+                }
+            });
+            scene.add(model);
+        });
+
+        // Keyboard & Mouse
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = true;
+            if (e.code === 'KeyS') player.keys.backward = true;
+            if (e.code === 'KeyA') player.keys.left = true;
+            if (e.code === 'KeyD') player.keys.right = true;
+            if (e.code === 'Space') player.keys.jump = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = false;
+            if (e.code === 'KeyS') player.keys.backward = false;
+            if (e.code === 'KeyA') player.keys.left = false;
+            if (e.code === 'KeyD') player.keys.right = false;
+            if (e.code === 'Space') player.keys.jump = false;
+        });
+        
+        renderer.domElement.addEventListener('click', () => {
+            if (!renderer.xr.isPresenting) renderer.domElement.requestPointerLock();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === renderer.domElement && !renderer.xr.isPresenting) {
+                player.euler.y -= e.movementX * player.turnSpeed;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - e.movementY * player.turnSpeed));
+                camera.quaternion.setFromEuler(player.euler);
+            }
+        });
+
+        // Mobile Logic
+        if (/Android|iPhone/i.test(navigator.userAgent)) {
+            setupJoystick(document.getElementById('joystick-left'), (x, y) => { player.touch.l.x = x; player.touch.l.y = y; });
+            setupJoystick(document.getElementById('joystick-right'), (x, y) => { 
+                player.euler.y -= x * 0.05;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - y * 0.05));
+                camera.quaternion.setFromEuler(player.euler);
+            });
+            const jBtn = document.getElementById('jump-button');
+            jBtn.addEventListener('touchstart', (e) => { e.preventDefault(); player.touch.jump = true; });
+            jBtn.addEventListener('touchend', (e) => { e.preventDefault(); player.touch.jump = false; });
+        }
+
+        function setupJoystick(el, cb) {
+            let tid = null;
+            const r = el.getBoundingClientRect(), c = r.width/2, m = c * 0.7;
+            el.addEventListener('touchstart', (e) => { if(tid===null) tid = e.changedTouches[0].identifier; e.preventDefault(); });
+            el.addEventListener('touchmove', (e) => {
+                for(let t of e.changedTouches) if(t.identifier === tid) {
+                    cb(Math.max(-1,Math.min(1,(t.clientX-r.left-c)/m)), Math.max(-1,Math.min(1,(t.clientY-r.top-c)/m)));
+                    e.preventDefault();
+                }
+            });
+            el.addEventListener('touchend', (e) => { for(let t of e.changedTouches) if(t.identifier === tid) { cb(0,0); tid = null; e.preventDefault(); } });
+        }
+
+        // VR Input Handling
+        function updateVRInput() {
+            const session = renderer.xr.getSession();
+            if (!session) return;
+            for (const source of session.inputSources) {
+                if (source.gamepad) {
+                    const axes = source.gamepad.axes; // 2=X, 3=Y
+                    if (source.handedness === 'left') {
+                        player.touch.l.x = axes[2];
+                        player.touch.l.y = axes[3];
+                    }
+                    if (source.handedness === 'right') {
+                        // Snap Turning for Comfort
+                        if (Math.abs(axes[2]) > 0.8 && !player.xr.snapTurnCooldown) {
+                            playerGroup.rotation.y -= Math.sign(axes[2]) * (Math.PI / 4);
+                            player.xr.snapTurnCooldown = true;
+                            setTimeout(() => player.xr.snapTurnCooldown = false, 250);
+                        }
+                        // Jump with A button (usually button 4 or 5)
+                        if (source.gamepad.buttons[4]?.pressed || source.gamepad.buttons[5]?.pressed) player.touch.jump = true;
+                        else player.touch.jump = false;
+                    }
+                }
+            }
+        }
+
+        // Animation Loop
+        renderer.setAnimationLoop(() => {
+            if (renderer.xr.isPresenting) updateVRInput();
+
+            // Gravity & Grounding
+            raycaster.ray.origin.copy(playerGroup.position);
+            raycaster.ray.direction.set(0, -1, 0);
+            const ground = raycaster.intersectObjects(collisionObjects);
+            player.isGrounded = ground.length > 0 && ground[0].distance < player.height + 0.2;
+
+            if (player.isGrounded) {
+                if (player.velocity.y < 0) player.velocity.y = 0;
+                playerGroup.position.y = ground[0].point.y + player.height;
+                if (player.keys.jump || player.touch.jump) player.velocity.y = 0.4;
+            } else {
+                player.velocity.y += player.gravity;
+            }
+            playerGroup.position.y += player.velocity.y;
+
+            // Movement Calculation
+            let moveX = 0, moveZ = 0;
+            if (renderer.xr.isPresenting || player.touch.l.x !== 0) {
+                moveX = player.touch.l.x * player.speed;
+                moveZ = -player.touch.l.y * player.speed;
+            } else {
+                moveX = (Number(player.keys.right) - Number(player.keys.left)) * player.speed;
+                moveZ = (Number(player.keys.forward) - Number(player.keys.backward)) * player.speed;
+            }
+
+            if (checkCollisions(moveX, moveZ)) {
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
+                
+                playerGroup.position.addScaledVector(dir, moveZ);
+                playerGroup.position.addScaledVector(side, moveX);
+            }
+
+            renderer.render(scene, camera);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // GUI for General Settings
+        const gui = new dat.GUI();
+        const settings = gui.addFolder('World Settings');
+        settings.add(player, 'speed', 0.05, 0.5).name('Move Speed');
+        settings.add(ambientLight, 'intensity', 0, 1).name('Ambient Light');
+        settings.open();
+    </script>
+</body>
+</html>

@@ -8,14 +8,6 @@
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
         
-        #info {
-            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-            width: auto; min-width: 400px; text-align: center; color: white;
-            background-color: rgba(0, 0, 0, 0.7); padding: 8px 15px; z-index: 99;
-            border: 2px solid #555; font-size: 1.1rem;
-        }
-        #info-toggle { background: #444; color: #fff; border: 1px solid #777; font-family: 'VT323', monospace; cursor: pointer; margin-top: 5px; padding: 2px 10px; }
-        
         #loading { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             background: #000; color: white; display: flex; flex-direction: column;
@@ -28,178 +20,155 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            padding: 25px 50px;
-            font-size: 2.2rem;
+            padding: 30px 60px;
+            font-size: 2.5rem;
             font-family: 'VT323', monospace;
             background: #2ecc71;
             color: white;
             border: 5px solid #fff;
-            border-radius: 12px;
+            border-radius: 15px;
             cursor: pointer;
-            z-index: 2000; /* Higher than everything */
-            display: none; /* Hidden until model loads */
-            box-shadow: 0 0 30px rgba(46, 204, 113, 0.6);
+            z-index: 2000;
+            display: none; /* Hidden until loaded */
+            box-shadow: 0 0 40px rgba(46, 204, 113, 0.8);
             text-transform: uppercase;
         }
-        #manual-vr-start:hover { background: #27ae60; transform: translate(-50%, -50%) scale(1.05); }
-
-        .joystick { position: fixed; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; touch-action: none; display: none; z-index: 10; }
-        #joystick-left { bottom: 30px; left: 30px; }
-        #joystick-right { bottom: 30px; right: 30px; }
-        #jump-button { position: fixed; bottom: 30px; right: 160px; font-size: 24px; background: rgba(0, 255, 0, 0.5); padding: 15px 25px; border-radius: 10px; touch-action: none; display: none; z-index: 10; }
-        @media (max-width: 768px) { .joystick, #jump-button { display: block; } }
     </style>
 </head>
 <body>
     <div id="loading">
-        <h1 id="load-status">Loading Environment...</h1>
+        <h1 id="load-status">Downloading World...</h1>
+        <div id="error-log" style="color:red"></div>
     </div>
 
-    <!-- THIS IS THE BUTTON YOU ARE LOOKING FOR -->
-    <button id="manual-vr-start">Enter VR Mode</button>
+    <button id="manual-vr-start">Start VR Experience</button>
 
-    <div id="info">
-        <div id="info-text">
-            WASD/Quest Stick: Move | Mouse/Right Stick: Look | SPACE: Jump<br>
-            On Quest 2: Click the button in the center.
-        </div>
-        <button id="info-toggle" onclick="document.getElementById('info').style.display='none'">Close</button>
-    </div>
-
-    <div id="joystick-left" class="joystick"></div>
-    <div id="joystick-right" class="joystick"></div>
-    <div id="jump-button">↑</div>
-    
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
 
     <script>
+        // 1. Basic Setup
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-        
         const playerGroup = new THREE.Group();
         playerGroup.position.set(155, 6, 8); 
         playerGroup.add(camera);
         scene.add(playerGroup);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.xr.enabled = true;
+        // Important for Quest 2 stability
+        renderer.outputEncoding = THREE.sRGBEncoding; 
         document.body.appendChild(renderer.domElement);
 
-        // VR START LOGIC
-        const vrStartButton = document.getElementById('manual-vr-start');
-        vrStartButton.addEventListener('click', () => {
+        // 2. VR Button Logic with Reference Space
+        const vrButton = document.getElementById('manual-vr-start');
+        vrButton.addEventListener('click', () => {
             if (navigator.xr) {
-                navigator.xr.requestSession('immersive-vr').then((session) => {
-                    renderer.xr.setSession(session);
-                    vrStartButton.style.display = 'none';
+                // Request 'local-floor' so the Quest knows where the ground is
+                const sessionInit = { optionalFeatures: ['local-floor', 'bounded-floor'] };
+                navigator.xr.requestSession('immersive-vr', sessionInit).then(async (session) => {
+                    await renderer.xr.setSession(session);
+                    // Explicitly tell the renderer to use the floor as zero height
+                    renderer.xr.setReferenceSpaceType('local-floor');
+                    vrButton.style.display = 'none';
                 }).catch(err => {
-                    alert("VR Error: " + err.message + "\nAre you using a VR browser?");
+                    document.getElementById('error-log').innerText = "XR Error: " + err.message;
                 });
-            } else {
-                alert("WebXR is not supported on this browser.");
             }
         });
 
-        scene.add(new THREE.AmbientLight(0xffde77, 0.4));
-        const dirLight = new THREE.DirectionalLight(0xffff86, 0.8);
-        dirLight.position.set(50, 50, -20);
-        scene.add(dirLight);
+        // 3. Environment & Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(50, 50, 20);
+        scene.add(sun);
 
         const manager = new THREE.LoadingManager();
-        const status = document.getElementById('load-status');
-        manager.onProgress = (url, l, t) => status.innerText = `Loading... ${Math.round((l/t)*100)}%`;
+        const statusText = document.getElementById('load-status');
+        manager.onProgress = (url, l, t) => statusText.innerText = `Loading Assets: ${Math.round((l/t)*100)}%`;
         manager.onLoad = () => {
             document.getElementById('loading').style.display = 'none';
-            vrStartButton.style.display = 'block'; // Show the button when ready
+            vrButton.style.display = 'block';
         };
 
-        new THREE.TextureLoader(manager).load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
+        const texLoader = new THREE.TextureLoader(manager);
+        // Set crossOrigin to allow the Quest to use external images safely
+        texLoader.setCrossOrigin('anonymous');
+        texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
             tex.mapping = THREE.EquirectangularReflectionMapping;
+            tex.encoding = THREE.sRGBEncoding;
             scene.background = tex;
             scene.environment = tex;
         });
 
-        const player = {
-            height: 1.8, speed: 0.15,
-            velocity: new THREE.Vector3(), gravity: -0.015,
-            isGrounded: false, euler: new THREE.Euler(0, 0, 0, 'YXZ'),
-            keys: {}, touch: { l: {x:0, y:0} }
-        };
-
+        // 4. Player State & Collision
+        const player = { height: 1.6, speed: 0.12, velocity: 0, gravity: -0.012, isGrounded: false, stick: {x:0, y:0} };
         const raycaster = new THREE.Raycaster();
         let collisionObjects = [];
 
-        function checkCollisions(moveX, moveZ) {
-            const origin = playerGroup.position.clone().add(new THREE.Vector3(0, 0.5, 0));
-            const moveVec = new THREE.Vector3(moveX, 0, moveZ).applyQuaternion(playerGroup.quaternion);
-            if (moveVec.length() > 0.01) {
-                raycaster.ray.origin.copy(origin);
-                raycaster.ray.direction.copy(moveVec.normalize());
-                const hit = raycaster.intersectObjects(collisionObjects);
-                if (hit.length > 0 && hit[0].distance < 0.7) return false;
-            }
-            return true;
-        }
-
-        const gltfLoader = new THREE.GLTFLoader(manager);
+        const loader = new THREE.GLTFLoader(manager);
         const draco = new THREE.DRACOLoader();
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
-        gltfLoader.setDRACOLoader(draco);
+        loader.setDRACOLoader(draco);
         
-        gltfLoader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
+        loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
             gltf.scene.scale.set(1.1, 1.1, 1.1);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });
 
-        window.addEventListener('keydown', e => player.keys[e.code] = true);
-        window.addEventListener('keyup', e => player.keys[e.code] = false);
-
+        // 5. The VR Render Loop
         renderer.setAnimationLoop(() => {
             const session = renderer.xr.getSession();
             if (session) {
+                // Read Quest Controllers
                 for (const source of session.inputSources) {
-                    if (source.gamepad) {
-                        const axes = source.gamepad.axes;
-                        if (source.handedness === 'left') { player.touch.l.x = axes[2]; player.touch.l.y = axes[3]; }
-                        if (source.handedness === 'right' && Math.abs(axes[2]) > 0.8) {
-                            playerGroup.rotation.y -= Math.sign(axes[2]) * 0.05;
-                        }
+                    if (source.gamepad && source.handedness === 'left') {
+                        player.stick.x = source.gamepad.axes[2];
+                        player.stick.y = source.gamepad.axes[3];
+                    }
+                    if (source.gamepad && source.handedness === 'right' && Math.abs(source.gamepad.axes[2]) > 0.7) {
+                        playerGroup.rotation.y -= source.gamepad.axes[2] * 0.05;
                     }
                 }
             }
 
+            // Simple Gravity
             raycaster.ray.origin.copy(playerGroup.position);
             raycaster.ray.direction.set(0, -1, 0);
-            const ground = raycaster.intersectObjects(collisionObjects);
-            player.isGrounded = ground.length > 0 && ground[0].distance < player.height + 0.2;
+            const groundHits = raycaster.intersectObjects(collisionObjects);
+            player.isGrounded = groundHits.length > 0 && groundHits[0].distance < player.height + 0.1;
 
             if (player.isGrounded) {
-                player.velocity.y = 0;
-                playerGroup.position.y = ground[0].point.y + player.height;
-                if (player.keys['Space']) player.velocity.y = 0.4;
-            } else { player.velocity.y += player.gravity; }
-            playerGroup.position.y += player.velocity.y;
+                player.velocity = 0;
+                playerGroup.position.y = groundHits[0].point.y + player.height;
+            } else {
+                player.velocity += player.gravity;
+                playerGroup.position.y += player.velocity;
+            }
 
-            let moveX = player.touch.l.x * player.speed;
-            let moveZ = -player.touch.l.y * player.speed;
-            if (player.keys['KeyW']) moveZ = -player.speed;
-            if (player.keys['KeyS']) moveZ = player.speed;
-
-            if (checkCollisions(moveX, moveZ)) {
+            // Movement
+            if (Math.abs(player.stick.x) > 0.1 || Math.abs(player.stick.y) > 0.1) {
                 const dir = new THREE.Vector3();
                 camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
-                playerGroup.position.addScaledVector(dir, moveZ);
-                playerGroup.position.addScaledVector(side, moveX);
+                
+                playerGroup.position.addScaledVector(dir, -player.stick.y * player.speed);
+                playerGroup.position.addScaledVector(side, player.stick.x * player.speed);
             }
 
             renderer.render(scene, camera);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
 </body>

@@ -16,7 +16,12 @@
         #info.collapsed #info-text { display: none; }
         #info.collapsed { min-width: 100px; padding: 5px; }
         #info-toggle { background: #444; color: #fff; border: 1px solid #777; font-family: 'VT323', monospace; cursor: pointer; margin-top: 5px; padding: 2px 10px; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px; border-radius: 10px; font-size: 1.5rem; z-index: 100; }
+        #loading { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            color: white; background-color: rgba(0, 0, 0, 0.8); padding: 30px; 
+            border: 2px solid #555; text-align: center; z-index: 100; min-width: 250px;
+        }
+        #error-msg { color: #ff5555; margin-top: 10px; font-size: 1rem; display: none; }
         
         /* Joysticks & Buttons */
         .joystick { position: fixed; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; touch-action: none; display: none; z-index: 10; }
@@ -25,7 +30,6 @@
         #jump-button { position: fixed; bottom: 30px; right: 160px; font-size: 24px; background: rgba(0, 255, 0, 0.5); padding: 15px 25px; border-radius: 10px; touch-action: none; display: none; z-index: 10; }
         @media (max-width: 768px) { .joystick, #jump-button { display: block; } #info { min-width: 90%; } }
 
-        /* Dat.GUI Pixel Font */
         .dg.main, .dg .property-name, .dg .c, .dg .slider { font-family: 'VT323', monospace !important; font-size: 1.1rem !important; }
     </style>
 </head>
@@ -38,7 +42,11 @@
         <button id="info-toggle">Close Controls</button>
     </div>
 
-    <div id="loading">Loading 3D Environment...</div>
+    <div id="loading">
+        <div id="loading-text">Initializing Engine...</div>
+        <div id="error-msg"></div>
+    </div>
+
     <div id="joystick-left" class="joystick"></div>
     <div id="joystick-right" class="joystick"></div>
     <div id="jump-button">↑</div>
@@ -50,8 +58,12 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/webxr/VRButton.js"></script>
 
     <script>
-        // UI Toggle
+        // UI Helpers
+        const loadingDiv = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+        const errorMsg = document.getElementById('error-msg');
         const infoBar = document.getElementById('info');
+
         document.getElementById('info-toggle').addEventListener('click', (e) => {
             e.stopPropagation();
             infoBar.classList.toggle('collapsed');
@@ -62,64 +74,65 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
         
-        // VR Player Group (Dolly)
         const playerGroup = new THREE.Group();
-        playerGroup.position.set(155, 6, 8); // Your set position
+        playerGroup.position.set(155, 6, 8); 
         playerGroup.add(camera);
         scene.add(playerGroup);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.xr.enabled = true;
         document.body.appendChild(renderer.domElement);
         document.body.appendChild(VRButton.createButton(renderer));
 
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffde77, 0.3);
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.4);
         scene.add(ambientLight);
         const directionalLight = new THREE.DirectionalLight(0xffff86, 0.8);
         directionalLight.position.set(70, 70, -20);
         directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.set(2048, 2048);
-        directionalLight.shadow.bias = -0.001;
+        directionalLight.shadow.mapSize.set(1024, 1024);
         scene.add(directionalLight);
 
-        // Sky
-        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (texture) => {
+        // Asset Management
+        const loadingManager = new THREE.LoadingManager();
+        loadingManager.onStart = (url) => { loadingText.innerText = "Loading: " + url.split('/').pop(); };
+        loadingManager.onProgress = (url, loaded, total) => { loadingText.innerText = `Loading... ${Math.round((loaded/total)*100)}%`; };
+        loadingManager.onLoad = () => { loadingDiv.style.display = 'none'; };
+        loadingManager.onError = (url) => {
+            console.error("Failed to load:", url);
+            errorMsg.style.display = 'block';
+            errorMsg.innerText = "Error loading: " + url.split('/').pop() + ". Check your connection.";
+            // Still try to start after 3 seconds even if there's an error
+            setTimeout(() => { loadingDiv.style.display = 'none'; }, 3000);
+        };
+
+        const texLoader = new THREE.TextureLoader(loadingManager);
+        texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
             scene.background = texture;
             scene.environment = texture;
         });
 
-        // Player State
         const player = {
-            height: 1.8,
-            speed: 0.15,
-            turnSpeed: 0.002,
-            velocity: new THREE.Vector3(),
-            gravity: -0.015,
-            isGrounded: false,
-            euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            height: 1.8, speed: 0.15, turnSpeed: 0.002, velocity: new THREE.Vector3(),
+            gravity: -0.015, isGrounded: false, euler: new THREE.Euler(0, 0, 0, 'YXZ'),
             keys: { forward: false, backward: false, left: false, right: false, jump: false },
             touch: { l: {x:0, y:0}, r: {x:0, y:0}, jump: false },
             xr: { snapTurnCooldown: false }
         };
 
-        // Collision Logic
         const raycaster = new THREE.Raycaster();
         let collisionObjects = [];
 
         function checkCollisions(moveX, moveZ) {
             const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
             let canMove = true;
-            
             checkPoints.forEach(point => {
                 const origin = playerGroup.position.clone().add(point);
                 const moveVec = new THREE.Vector3(moveX, 0, moveZ).applyQuaternion(playerGroup.quaternion);
-                
                 if (moveVec.length() > 0) {
                     raycaster.ray.origin.copy(origin);
                     raycaster.ray.direction.copy(moveVec.normalize());
@@ -130,16 +143,16 @@
             return canMove;
         }
 
-        // Model Loading
-        const loadingManager = new THREE.LoadingManager(() => {
-            document.getElementById('loading').style.display = 'none';
-        });
-        const loader = new THREE.GLTFLoader(loadingManager);
+        // Model Loading with CDN Link
+        const gltfLoader = new THREE.GLTFLoader(loadingManager);
         const dracoLoader = new THREE.DRACOLoader();
         dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
-        loader.setDRACOLoader(dracoLoader);
+        gltfLoader.setDRACOLoader(dracoLoader);
         
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
+        // Using JSDelivr CDN for GitHub - much more reliable than raw.githubusercontent
+        const modelUrl = 'https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/santos_dumont_merged_clube_v3.gltf';
+        
+        gltfLoader.load(modelUrl, (gltf) => {
             const model = gltf.scene;
             model.scale.set(1.1, 1.1, 1.1);
             model.traverse(n => {
@@ -151,7 +164,7 @@
             scene.add(model);
         });
 
-        // Keyboard & Mouse
+        // Desktop Controls
         document.addEventListener('keydown', (e) => {
             if (e.code === 'KeyW') player.keys.forward = true;
             if (e.code === 'KeyS') player.keys.backward = true;
@@ -179,7 +192,20 @@
             }
         });
 
-        // Mobile Logic
+        // Mobile / VR Controls
+        function setupJoystick(el, cb) {
+            let tid = null;
+            el.addEventListener('touchstart', (e) => { if(tid===null) tid = e.changedTouches[0].identifier; e.preventDefault(); });
+            el.addEventListener('touchmove', (e) => {
+                const r = el.getBoundingClientRect(), c = r.width/2, m = c * 0.7;
+                for(let t of e.changedTouches) if(t.identifier === tid) {
+                    cb(Math.max(-1,Math.min(1,(t.clientX-r.left-c)/m)), Math.max(-1,Math.min(1,(t.clientY-r.top-c)/m)));
+                    e.preventDefault();
+                }
+            });
+            el.addEventListener('touchend', (e) => { for(let t of e.changedTouches) if(t.identifier === tid) { cb(0,0); tid = null; e.preventDefault(); } });
+        }
+
         if (/Android|iPhone/i.test(navigator.userAgent)) {
             setupJoystick(document.getElementById('joystick-left'), (x, y) => { player.touch.l.x = x; player.touch.l.y = y; });
             setupJoystick(document.getElementById('joystick-right'), (x, y) => { 
@@ -192,50 +218,29 @@
             jBtn.addEventListener('touchend', (e) => { e.preventDefault(); player.touch.jump = false; });
         }
 
-        function setupJoystick(el, cb) {
-            let tid = null;
-            const r = el.getBoundingClientRect(), c = r.width/2, m = c * 0.7;
-            el.addEventListener('touchstart', (e) => { if(tid===null) tid = e.changedTouches[0].identifier; e.preventDefault(); });
-            el.addEventListener('touchmove', (e) => {
-                for(let t of e.changedTouches) if(t.identifier === tid) {
-                    cb(Math.max(-1,Math.min(1,(t.clientX-r.left-c)/m)), Math.max(-1,Math.min(1,(t.clientY-r.top-c)/m)));
-                    e.preventDefault();
-                }
-            });
-            el.addEventListener('touchend', (e) => { for(let t of e.changedTouches) if(t.identifier === tid) { cb(0,0); tid = null; e.preventDefault(); } });
-        }
-
-        // VR Input Handling
         function updateVRInput() {
             const session = renderer.xr.getSession();
             if (!session) return;
             for (const source of session.inputSources) {
                 if (source.gamepad) {
-                    const axes = source.gamepad.axes; // 2=X, 3=Y
-                    if (source.handedness === 'left') {
-                        player.touch.l.x = axes[2];
-                        player.touch.l.y = axes[3];
-                    }
+                    const axes = source.gamepad.axes; 
+                    if (source.handedness === 'left') { player.touch.l.x = axes[2]; player.touch.l.y = axes[3]; }
                     if (source.handedness === 'right') {
-                        // Snap Turning for Comfort
                         if (Math.abs(axes[2]) > 0.8 && !player.xr.snapTurnCooldown) {
                             playerGroup.rotation.y -= Math.sign(axes[2]) * (Math.PI / 4);
                             player.xr.snapTurnCooldown = true;
                             setTimeout(() => player.xr.snapTurnCooldown = false, 250);
                         }
-                        // Jump with A button (usually button 4 or 5)
-                        if (source.gamepad.buttons[4]?.pressed || source.gamepad.buttons[5]?.pressed) player.touch.jump = true;
-                        else player.touch.jump = false;
+                        player.touch.jump = source.gamepad.buttons[4]?.pressed || source.gamepad.buttons[5]?.pressed;
                     }
                 }
             }
         }
 
-        // Animation Loop
+        // Loop
         renderer.setAnimationLoop(() => {
             if (renderer.xr.isPresenting) updateVRInput();
 
-            // Gravity & Grounding
             raycaster.ray.origin.copy(playerGroup.position);
             raycaster.ray.direction.set(0, -1, 0);
             const ground = raycaster.intersectObjects(collisionObjects);
@@ -245,12 +250,9 @@
                 if (player.velocity.y < 0) player.velocity.y = 0;
                 playerGroup.position.y = ground[0].point.y + player.height;
                 if (player.keys.jump || player.touch.jump) player.velocity.y = 0.4;
-            } else {
-                player.velocity.y += player.gravity;
-            }
+            } else { player.velocity.y += player.gravity; }
             playerGroup.position.y += player.velocity.y;
 
-            // Movement Calculation
             let moveX = 0, moveZ = 0;
             if (renderer.xr.isPresenting || player.touch.l.x !== 0) {
                 moveX = player.touch.l.x * player.speed;
@@ -265,11 +267,9 @@
                 camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
-                
                 playerGroup.position.addScaledVector(dir, moveZ);
                 playerGroup.position.addScaledVector(side, moveX);
             }
-
             renderer.render(scene, camera);
         });
 
@@ -279,12 +279,14 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // GUI for General Settings
-        const gui = new dat.GUI();
-        const settings = gui.addFolder('World Settings');
-        settings.add(player, 'speed', 0.05, 0.5).name('Move Speed');
-        settings.add(ambientLight, 'intensity', 0, 1).name('Ambient Light');
-        settings.open();
+        // GUI
+        try {
+            const gui = new dat.GUI();
+            const settings = gui.addFolder('World Settings');
+            settings.add(player, 'speed', 0.05, 0.5).name('Move Speed');
+            settings.add(ambientLight, 'intensity', 0, 1).name('Ambient Intensity');
+            settings.open();
+        } catch(e) { console.warn("GUI failed to load"); }
     </script>
 </body>
 </html>

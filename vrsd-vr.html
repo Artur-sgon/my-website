@@ -36,7 +36,7 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
         const playerGroup = new THREE.Group();
-        playerGroup.position.set(155, 6, 8); 
+        playerGroup.position.set(155, 6, 15); 
         playerGroup.add(camera);
         scene.add(playerGroup);
 
@@ -108,7 +108,7 @@
         loader.setDRACOLoader(draco);
         
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
-            gltf.scene.scale.set(1.16, 1.16, 1.16);
+            gltf.scene.scale.set(1.3, 1.3, 1.3);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });

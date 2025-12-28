@@ -107,7 +107,7 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
-        loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/santos_dumont_merged_clube_v3.gltf', (gltf) => {
+        loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);

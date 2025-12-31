@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - Original Lighting</title>
+    <title>Toy Apache Simulator</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -43,7 +43,7 @@
     <div id="info">
         <div id="info-text">
             <span id="control-hint">WASD: Move | Mouse: Look | SPACE: Jump | R: Run</span><br>
-            <b>Click screen to start.</b> ESC to unlock.
+            <b style="color:#ffcc00">TOY MODE ACTIVE IN FLIGHT</b>
         </div>
         <div id="speed-gauge">PWR: 0% | SPD: 0 | YAW: 0 | [FREE LOOK OFF]</div>
         
@@ -93,36 +93,30 @@
         });
 
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
-        const renderer = new THREE.WebGLRenderer({ 
-            canvas: document.getElementById('canvas'), 
-            antialias: true,
-            powerPreference: "high-performance" 
-        });
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 5000);
+        const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         
-        // REVERTING TO ORIGINAL LIGHTING DEFAULTS
+        // ORIGINAL LIGHTING RESTORED
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        // Removed sRGBEncoding and ToneMapping to match the older file
 
-        // --- ORIGINAL LIGHTING SETUP ---
-        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2); // Exact original value
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2);
         scene.add(ambientLight);
         
-        const sun = new THREE.DirectionalLight(0xffff86, 0.7); // Exact original value
-        sun.position.set(70, 70, -20); // Exact original position
+        const sun = new THREE.DirectionalLight(0xffff86, 0.7);
+        sun.position.set(70, 70, -20);
         sun.castShadow = true;
-        sun.shadow.mapSize.width = 4096; // Exact original size
+        sun.shadow.mapSize.width = 4096;
         sun.shadow.mapSize.height = 4096;
-        sun.shadow.bias = -0.001; // Exact original bias
+        sun.shadow.bias = -0.001;
         scene.add(sun);
 
-        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2); // Exact original value
+        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2);
         scene.add(hemisphereLight);
 
-        // UI Slider Influence
+        // UI Listeners
         brightSlider.addEventListener('input', (e) => {
             const val = parseFloat(e.target.value);
             ambientLight.intensity = 0.2 * val;
@@ -133,6 +127,7 @@
         shadowToggle.addEventListener('change', (e) => { sun.castShadow = e.target.checked; });
         shadowToggle.addEventListener('click', (e) => e.stopPropagation());
 
+        let envModel = null;
         let cockpit = null;
         let collisionObjects = [];
         const loader = new THREE.GLTFLoader();
@@ -141,7 +136,9 @@
         loader.setDRACOLoader(draco);
         
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
-            gltf.scene.traverse(c => { 
+            envModel = gltf.scene;
+            envModel.scale.set(1.16, 1.16, 1.16); // Starting scale
+            envModel.traverse(c => { 
                 if(c.isMesh) { 
                     c.material.side = THREE.DoubleSide; 
                     c.castShadow = true;
@@ -149,19 +146,13 @@
                     collisionObjects.push(c); 
                 } 
             });
-            scene.add(gltf.scene);
+            scene.add(envModel);
             document.getElementById('loading').style.display = 'none';
         });
 
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
             cockpit = gltf.scene;
-            cockpit.traverse(child => { 
-                if (child.isMesh) {
-                    child.material.side = THREE.DoubleSide; 
-                    child.castShadow = true;
-                    child.receiveShadow = true;
-                }
-            });
+            cockpit.traverse(child => { if (child.isMesh) child.material.side = THREE.DoubleSide; });
             cockpit.visible = false;
             scene.add(cockpit);
         });
@@ -174,13 +165,13 @@
         const raycaster = new THREE.Raycaster();
 
         function checkCollisions(moveX, moveZ) {
-            if (collisionObjects.length === 0) return true;
+            if (collisionObjects.length === 0 || player.mode === 'fly') return true;
             const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
             let canMove = true;
             checkPoints.forEach(point => {
                 const origin = new THREE.Vector3().copy(camera.position).add(point);
+                raycaster.ray.origin.copy(origin);
                 if (moveZ !== 0) {
-                    raycaster.ray.origin.copy(origin);
                     raycaster.ray.direction.set(0, 0, moveZ > 0 ? 1 : -1);
                     if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
                 }
@@ -216,13 +207,38 @@
 
         modeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            player.mode = (player.mode === 'walk') ? 'fly' : 'walk';
-            const isFly = player.mode === 'fly';
-            modeBtn.textContent = isFly ? 'Switch to Walk Mode' : 'Switch to Flight Mode';
-            modeBtn.classList.toggle('flying', isFly);
-            document.getElementById('speed-gauge').style.display = isFly ? 'block' : 'none';
-            if (cockpit) cockpit.visible = isFly;
-            document.getElementById('control-hint').innerHTML = isFly ? "W/S: Alt | A/D: Pivot | Scroll: PWR | Mouse: Tilt | SHIFT: Head" : "WASD: Move | Mouse: Look | SPACE: Jump | R: Run";
+            const toyScale = 1;
+            const originalScale = 1.16;
+
+            if (player.mode === 'walk') {
+                // SWITCHING TO TOY FLIGHT
+                player.mode = 'fly';
+                if(envModel) envModel.scale.set(originalScale * toyScale, originalScale * toyScale, originalScale * toyScale);
+                // Move camera to maintain relative position
+                camera.position.x *= toyScale;
+                camera.position.z *= toyScale;
+                camera.position.y *= toyScale;
+                
+                modeBtn.textContent = 'Switch to Walk Mode';
+                modeBtn.classList.add('flying');
+                document.getElementById('speed-gauge').style.display = 'block';
+                if (cockpit) cockpit.visible = true;
+                document.getElementById('control-hint').innerHTML = "TOY MODE: Everything is 10x bigger!";
+            } else {
+                // SWITCHING TO HUMAN WALK
+                player.mode = 'walk';
+                if(envModel) envModel.scale.set(originalScale, originalScale, originalScale);
+                // Move camera back
+                camera.position.x /= toyScale;
+                camera.position.z /= toyScale;
+                camera.position.y = player.height; // Snap to human height
+                
+                modeBtn.textContent = 'Switch to Flight Mode';
+                modeBtn.classList.remove('flying');
+                document.getElementById('speed-gauge').style.display = 'none';
+                if (cockpit) cockpit.visible = false;
+                document.getElementById('control-hint').innerHTML = "WASD: Move | Mouse: Look | SPACE: Jump | R: Run";
+            }
         });
 
         document.addEventListener('mousemove', (e) => {
@@ -259,7 +275,6 @@
                         camera.position.y = inter[0].point.y + player.height;
                     }
                 }
-
                 if (player.keys.jump && (player.isGrounded || player.jumpCount < player.maxJumps)) {
                     player.velocity.y = player.jumpForce;
                     player.jumpCount++;
@@ -276,15 +291,19 @@
                     if(player.keys.left) camera.position.addScaledVector(side, speed);
                     if(player.keys.right) camera.position.addScaledVector(side, -speed);
                 }
-
                 camera.position.y += player.velocity.y;
                 camera.quaternion.setFromEuler(player.euler);
 
             } else {
+                // Flight Physics
                 player.forwardThrottle += (player.targetThrottle - player.forwardThrottle) * 0.005;
-                if (player.keys.forward) player.verticalVelocity += 0.006;
-                else if (player.keys.backward) player.verticalVelocity -= 0.006;
+                // Scale movement speed for Toy Mode (Toy feels fast in big world)
+                const toySpeedMult = 5.0; 
+                
+                if (player.keys.forward) player.verticalVelocity += 0.006 * toySpeedMult;
+                else if (player.keys.backward) player.verticalVelocity -= 0.006 * toySpeedMult;
                 player.verticalVelocity *= 0.96; camera.position.y += player.verticalVelocity;
+                
                 if (player.keys.left) player.yawVelocity += 0.0015;
                 else if (player.keys.right) player.yawVelocity -= 0.0015;
                 player.yawVelocity *= 0.94; player.euler.y += player.yawVelocity;
@@ -293,8 +312,8 @@
                 const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 
-                camera.position.addScaledVector(fwd, player.forwardThrottle + (-player.flyPitch * 0.25));
-                camera.position.addScaledVector(sid, -player.flyRoll * 0.25);
+                camera.position.addScaledVector(fwd, (player.forwardThrottle + (-player.flyPitch * 0.25)) * toySpeedMult);
+                camera.position.addScaledVector(sid, -player.flyRoll * 0.25 * toySpeedMult);
                 
                 const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
                 const headQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
@@ -305,7 +324,7 @@
                     const offset = player.cockpitOffset.clone().applyQuaternion(heliQ);
                     cockpit.position.copy(camera.position).add(offset);
                 }
-                document.getElementById('speed-gauge').textContent = `PWR: ${(player.targetThrottle*100).toFixed(0)}% | SPD: ${(player.forwardThrottle*100).toFixed(0)} | V-LIFT: ${(player.verticalVelocity*400).toFixed(0)} | ${player.keys.shift ? '[LOOK]' : '[FLY]'}`;
+                document.getElementById('speed-gauge').textContent = `TOY PWR: ${(player.targetThrottle*100).toFixed(0)}% | SPD: ${(player.forwardThrottle*100).toFixed(0)}`;
             }
         }
 

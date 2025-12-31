@@ -271,11 +271,11 @@
             height: 1.8,
             speed: 0.15,
             turnSpeed: 0.002,
-            jumpForce: 0.5,
+            jumpForce: 0.4,
             jumpCount: 0,
-            maxJumps: 2,
+            maxJumps: 100,
             velocity: new THREE.Vector3(),
-            gravity: -0.02,
+            gravity: -0.005,
             groundCheckDistance: 0.25,
             isGrounded: false,
             jumpCooldown: false,
@@ -322,7 +322,7 @@
             });
         }
         
-        loadModel('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_trees_apache.glb');
+        loadModel('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb');
         
         if (player.touch.isMobile) {
             setupJoystick(document.getElementById('joystick-left'), (x, y) => {

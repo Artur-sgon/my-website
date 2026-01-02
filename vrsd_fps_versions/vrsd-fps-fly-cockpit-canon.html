@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - Audio Systems</title>
+    <title>AH-64 Apache Simulator - Rotors Online</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -148,20 +148,17 @@
         const soundCannon = new THREE.Audio(listener);
         const audioLoader = new THREE.AudioLoader();
 
-        // Load Rotor Sound
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', function(buffer) {
+        audioLoader.load('https://github.com/Artur-sgon/my-website/raw/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', function(buffer) {
             soundRotor.setBuffer(buffer);
             soundRotor.setLoop(true);
             soundRotor.setVolume(0.2); 
         });
 
-        // Load Cannon Sound
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', function(buffer) {
+        audioLoader.load('https://github.com/Artur-sgon/my-website/raw/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', function(buffer) {
             soundCannon.setBuffer(buffer);
             soundCannon.setLoop(true);
             soundCannon.setVolume(0.4);
         });
-        // --------------------
 
         const renderer = new THREE.WebGLRenderer({ 
             canvas: document.getElementById('canvas'), 
@@ -208,22 +205,21 @@
         swapControlToggle.addEventListener('click', (e) => e.stopPropagation());
 
         let cockpit = null;
+        let blades = null;
+        let bladeAngle = 0;
         let collisionObjects = [];
         const loader = new THREE.GLTFLoader();
         const draco = new THREE.DRACOLoader();
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
-        // --- TEXTURE LOADERS ---
         const textureLoader = new THREE.TextureLoader();
         
-        // 1. Explosion Sprite Sheet
         textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png', (t) => {
             weapon.burstTexture = t;
             t.repeat.set(1/7, 1);
         });
 
-        // 2. Smoke Texture
         textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/smoke_a.png', (t) => {
             weapon.smokeTexture = t;
         });
@@ -241,6 +237,7 @@
             document.getElementById('loading').style.display = 'none';
         });
 
+        // Load Cockpit
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
             cockpit = gltf.scene;
             cockpit.traverse(child => { 
@@ -252,6 +249,20 @@
             });
             cockpit.visible = false;
             scene.add(cockpit);
+        });
+
+        // Load Blades
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-blades.glb', (gltf) => {
+            blades = gltf.scene;
+            blades.traverse(child => { 
+                if (child.isMesh) {
+                    child.material.side = THREE.DoubleSide; 
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            blades.visible = false;
+            scene.add(blades);
         });
 
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
@@ -316,7 +327,6 @@
         document.addEventListener('mousedown', (e) => {
             if (e.button === 0 && player.lockControls && player.mode === 'fly') {
                 weapon.isFiring = true;
-                // PLAY CANNON SOUND
                 if (soundCannon.buffer && !soundCannon.isPlaying) {
                     soundCannon.play();
                 }
@@ -324,7 +334,6 @@
         });
         document.addEventListener('mouseup', () => {
             weapon.isFiring = false;
-            // STOP CANNON SOUND
             if (soundCannon.isPlaying) {
                 soundCannon.stop();
             }
@@ -345,7 +354,6 @@
 
         modeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            // Resume Audio Context if needed
             if (listener.context.state === 'suspended') {
                 listener.context.resume();
             }
@@ -356,18 +364,19 @@
             modeBtn.textContent = isFly ? 'Switch to Walk Mode' : 'Switch to Flight Mode';
             modeBtn.classList.toggle('flying', isFly);
             
-            // --- HANDLE SOUNDS ON MODE SWITCH ---
             if (isFly) {
                 if (soundRotor.buffer) soundRotor.play();
             } else {
                 if (soundRotor.isPlaying) soundRotor.stop();
-                if (soundCannon.isPlaying) soundCannon.stop(); // Stop gun if shooting while switching
+                if (soundCannon.isPlaying) soundCannon.stop(); 
             }
-            // ------------------------------------
 
             document.getElementById('speed-gauge').style.display = isFly ? 'block' : 'none';
             crosshair.style.display = isFly ? 'block' : 'none';
+            
             if (cockpit) cockpit.visible = isFly;
+            if (blades) blades.visible = isFly; // Toggle blades
+            
             updateControlHint();
         });
 
@@ -404,7 +413,7 @@
                     transparent: true, 
                     depthWrite: false, 
                     blending: THREE.AdditiveBlending,
-                    rotation: Math.random() * Math.PI * 2 // NEW: Random rotation for burst
+                    rotation: Math.random() * Math.PI * 2 
                 });
                 const sprite = new THREE.Sprite(mat);
                 sprite.position.copy(position);
@@ -422,43 +431,38 @@
         function createSmoke(position) {
             if (!weapon.smokeTexture) return;
 
-            // Spawn multiple smoke particles per explosion
             for (let i = 0; i < 12; i++) {
                 const mat = new THREE.SpriteMaterial({ 
                     map: weapon.smokeTexture, 
                     transparent: true, 
-                    opacity: 1, // Start semi-transparent
+                    opacity: 1, 
                     depthWrite: false,
-                    rotation: Math.random() * Math.PI * 2 // Random starting rotation
+                    rotation: Math.random() * Math.PI * 2 
                 });
 
                 const sprite = new THREE.Sprite(mat);
-                
-                // Randomize spawn position slightly around the hit point
                 const offsetX = (Math.random() - 0.5) * 1.5;
                 const offsetZ = (Math.random() - 0.5) * 1.5;
                 const offsetY = Math.random() * 0.5;
                 
                 sprite.position.set(position.x + offsetX, position.y + offsetY, position.z + offsetZ);
                 
-                // Randomize scale
                 const scale = 0.5 + Math.random() * 1.5;
                 sprite.scale.set(scale, scale, scale);
                 
                 scene.add(sprite);
 
-                // Smoke Physics
                 const velocity = new THREE.Vector3(
-                    (Math.random() - 0.5) * 0.05, // Slight spread X
-                    0.05 + Math.random() * 0.08,  // Upward Buoyancy
-                    (Math.random() - 0.5) * 0.05  // Slight spread Z
+                    (Math.random() - 0.5) * 0.05, 
+                    0.05 + Math.random() * 0.08,  
+                    (Math.random() - 0.5) * 0.05  
                 );
 
                 weapon.smokeParticles.push({
                     mesh: sprite,
                     velocity: velocity,
-                    life: 0.4, // Lifetime (100%)
-                    decay: 0.01 + Math.random() * 0.01 // Random fade speed
+                    life: 0.4, 
+                    decay: 0.01 + Math.random() * 0.01 
                 });
             }
         }
@@ -538,8 +542,20 @@
                     cockpit.position.copy(camera.position).add(offset);
                 }
 
+                // --- UPDATE BLADES ---
+                if (blades) {
+                    bladeAngle += 0.3; // Spin speed
+                    // Position: Relative to Camera, but locked to Helicopter Body rotation
+                    const bladeOffset = new THREE.Vector3(0, 2, 1.5); // 2m up, 1.5m back
+                    bladeOffset.applyQuaternion(heliQ); // Rotate offset by Heli Body
+                    blades.position.copy(camera.position).add(bladeOffset);
+                    
+                    // Rotation: Heli Body + Spin
+                    const spinQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bladeAngle);
+                    blades.quaternion.copy(heliQ).multiply(spinQ);
+                }
+
                 // --- IHADSS WEAPON SYSTEM ---
-                // 1. Spawning
                 if (weapon.isFiring && weapon.template && (now - weapon.lastFired > weapon.fireRate)) {
                     const spawnOffset = new THREE.Vector3(0, -2, -3);
                     spawnOffset.applyQuaternion(heliQ); 
@@ -562,7 +578,7 @@
                     weapon.lastFired = now;
                 }
 
-                // 2. Bullet Logic
+                // Bullet Logic
                 for (let i = weapon.bullets.length - 1; i >= 0; i--) {
                     const b = weapon.bullets[i];
                     
@@ -588,7 +604,7 @@
                     }
                 }
 
-                // 3. Explosion Animation Logic
+                // Explosion Animation
                 for (let i = weapon.explosions.length - 1; i >= 0; i--) {
                     const exp = weapon.explosions[i];
                     if (now - exp.lastFrameTime > exp.frameDuration) {
@@ -605,23 +621,16 @@
                     }
                 }
 
-                // 4. Smoke Particle Logic
+                // Smoke Particle Logic
                 for (let i = weapon.smokeParticles.length - 1; i >= 0; i--) {
                     const s = weapon.smokeParticles[i];
                     
-                    // Move
                     s.mesh.position.add(s.velocity);
-                    
-                    // Drag (slow down horizontal movement)
                     s.velocity.x *= 0.98;
                     s.velocity.z *= 0.98;
-                    
-                    // Fade out
                     s.life -= s.decay;
                     s.mesh.material.opacity = s.life;
-                    
-                    // Expand
-                    s.mesh.scale.multiplyScalar(1.02); // Grow by 2% per frame
+                    s.mesh.scale.multiplyScalar(1.02); 
                     
                     if (s.life <= 0) {
                         scene.remove(s.mesh);

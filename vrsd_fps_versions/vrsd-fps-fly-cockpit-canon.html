@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - Systems Fixed</title>
+    <title>AH-64 Apache Simulator - Impact FX</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -112,11 +112,13 @@
         const weapon = {
             isFiring: false,
             lastFired: 0,
-            fireRate: 60, 
+            fireRate: 70, 
             speed: 4.0,   
-            spread: 0.04, 
-            bullets: [],  
-            template: null 
+            spread: 0.05, 
+            bullets: [], 
+            explosions: [], // Array to manage active explosions
+            template: null,
+            burstTexture: null // Store the explosion texture
         };
 
         const infoBar = document.getElementById('info');
@@ -186,6 +188,14 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
+        // --- TEXTURE LOADER FOR EXPLOSION ---
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png', (t) => {
+            weapon.burstTexture = t;
+            // Configure sprite sheet: 7 columns, 1 row
+            t.repeat.set(1/7, 1);
+        });
+
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
             gltf.scene.traverse(c => { 
                 if(c.isMesh) { 
@@ -220,7 +230,7 @@
                     c.receiveShadow = false;
                 }
             });
-            weapon.template.scale.set(0.5, 0.5, 0.5);
+            weapon.template.scale.set(0.6, 0.6, 0.6);
         });
 
         new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
@@ -327,6 +337,36 @@
         document.getElementById('canvas').addEventListener('click', () => { document.getElementById('canvas').requestPointerLock(); });
         document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === document.getElementById('canvas'));
 
+        // --- FX HELPER ---
+        function createExplosion(position) {
+            if (!weapon.burstTexture) return;
+
+            // We must clone the texture to allow individual offsets for animation
+            const tex = weapon.burstTexture.clone();
+            tex.needsUpdate = true; 
+            
+            const mat = new THREE.SpriteMaterial({ 
+                map: tex, 
+                transparent: true,
+                depthWrite: false, // Don't write to depth buffer (standard for particles)
+                blending: THREE.AdditiveBlending // Makes it look glowing
+            });
+            
+            const sprite = new THREE.Sprite(mat);
+            sprite.position.copy(position);
+            sprite.scale.set(3, 3, 3); // Explosion size
+            
+            scene.add(sprite);
+            
+            weapon.explosions.push({
+                mesh: sprite,
+                texture: tex,
+                currentFrame: 0,
+                lastFrameTime: Date.now(),
+                frameDuration: 30 // ms per frame (Speed of explosion)
+            });
+        }
+
         function update() {
             const now = Date.now();
 
@@ -388,8 +428,6 @@
                 const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 
-                // --- RESTORED FLIGHT PHYSICS ---
-                // These lines were missing in previous version, restoring forward/strafing movement based on tilt
                 camera.position.addScaledVector(fwd, player.forwardThrottle + (-player.flyPitch * 0.25));
                 camera.position.addScaledVector(sid, -player.flyRoll * 0.25);
 
@@ -405,6 +443,7 @@
                 }
 
                 // --- IHADSS WEAPON SYSTEM ---
+                // 1. Spawning
                 if (weapon.isFiring && weapon.template && (now - weapon.lastFired > weapon.fireRate)) {
                     const spawnOffset = new THREE.Vector3(0, -2, -3);
                     spawnOffset.applyQuaternion(heliQ); 
@@ -419,10 +458,7 @@
                     
                     const velocity = localDir.applyQuaternion(camera.quaternion).multiplyScalar(weapon.speed);
 
-                    // 1. Aim the bullet
                     bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,-1), velocity.clone().normalize());
-                    
-                    // 2. Apply Random Roll (Z-rotation)
                     bulletMesh.rotateZ(Math.random() * Math.PI * 2);
 
                     scene.add(bulletMesh);
@@ -430,14 +466,56 @@
                     weapon.lastFired = now;
                 }
 
+                // 2. Bullet Logic (Physics + Collision)
                 for (let i = weapon.bullets.length - 1; i >= 0; i--) {
                     const b = weapon.bullets[i];
+                    
+                    // Collision Detection (Raycast forward before moving)
+                    const direction = b.velocity.clone().normalize();
+                    const distance = b.velocity.length(); // How far it moves this frame
+                    
+                    raycaster.set(b.mesh.position, direction);
+                    
+                    // Only check against map objects
+                    const hits = raycaster.intersectObjects(collisionObjects);
+                    
+                    if (hits.length > 0 && hits[0].distance <= distance) {
+                        // IMPACT!
+                        createExplosion(hits[0].point);
+                        
+                        scene.remove(b.mesh);
+                        weapon.bullets.splice(i, 1);
+                        continue; // Skip movement
+                    }
+
+                    // Move if no collision
                     b.mesh.position.add(b.velocity); 
                     b.life--; 
                     
                     if (b.life <= 0) {
                         scene.remove(b.mesh);
                         weapon.bullets.splice(i, 1);
+                    }
+                }
+
+                // 3. Explosion Animation Logic
+                for (let i = weapon.explosions.length - 1; i >= 0; i--) {
+                    const exp = weapon.explosions[i];
+                    
+                    if (now - exp.lastFrameTime > exp.frameDuration) {
+                        exp.currentFrame++;
+                        exp.lastFrameTime = now;
+
+                        if (exp.currentFrame > 6) {
+                            // Animation done
+                            scene.remove(exp.mesh);
+                            exp.mesh.material.dispose(); // Cleanup material
+                            exp.texture.dispose(); // Cleanup texture clone
+                            weapon.explosions.splice(i, 1);
+                        } else {
+                            // Update texture offset (shift 1/7th to the right)
+                            exp.texture.offset.x = exp.currentFrame / 7;
+                        }
                     }
                 }
                 

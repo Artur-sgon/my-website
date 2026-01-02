@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - FX Final</title>
+    <title>AH-64 Apache Simulator - Audio Systems</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -112,15 +112,15 @@
         const weapon = {
             isFiring: false,
             lastFired: 0,
-            fireRate: 70, 
+            fireRate: 120, 
             speed: 4.0,   
             spread: 0.04, 
             bullets: [], 
             explosions: [], 
-            smokeParticles: [], // Array for smoke
+            smokeParticles: [],
             template: null,
             burstTexture: null,
-            smokeTexture: null // Store smoke texture
+            smokeTexture: null 
         };
 
         const infoBar = document.getElementById('info');
@@ -139,6 +139,30 @@
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
+        
+        // --- AUDIO SYSTEM ---
+        const listener = new THREE.AudioListener();
+        camera.add(listener);
+
+        const soundRotor = new THREE.Audio(listener);
+        const soundCannon = new THREE.Audio(listener);
+        const audioLoader = new THREE.AudioLoader();
+
+        // Load Rotor Sound
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', function(buffer) {
+            soundRotor.setBuffer(buffer);
+            soundRotor.setLoop(true);
+            soundRotor.setVolume(0.2); 
+        });
+
+        // Load Cannon Sound
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', function(buffer) {
+            soundCannon.setBuffer(buffer);
+            soundCannon.setLoop(true);
+            soundCannon.setVolume(0.4);
+        });
+        // --------------------
+
         const renderer = new THREE.WebGLRenderer({ 
             canvas: document.getElementById('canvas'), 
             antialias: true,
@@ -292,9 +316,19 @@
         document.addEventListener('mousedown', (e) => {
             if (e.button === 0 && player.lockControls && player.mode === 'fly') {
                 weapon.isFiring = true;
+                // PLAY CANNON SOUND
+                if (soundCannon.buffer && !soundCannon.isPlaying) {
+                    soundCannon.play();
+                }
             }
         });
-        document.addEventListener('mouseup', () => weapon.isFiring = false);
+        document.addEventListener('mouseup', () => {
+            weapon.isFiring = false;
+            // STOP CANNON SOUND
+            if (soundCannon.isPlaying) {
+                soundCannon.stop();
+            }
+        });
 
 
         function updateControlHint() {
@@ -311,11 +345,26 @@
 
         modeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            // Resume Audio Context if needed
+            if (listener.context.state === 'suspended') {
+                listener.context.resume();
+            }
+
             player.mode = (player.mode === 'walk') ? 'fly' : 'walk';
             weapon.isFiring = false;
             const isFly = player.mode === 'fly';
             modeBtn.textContent = isFly ? 'Switch to Walk Mode' : 'Switch to Flight Mode';
             modeBtn.classList.toggle('flying', isFly);
+            
+            // --- HANDLE SOUNDS ON MODE SWITCH ---
+            if (isFly) {
+                if (soundRotor.buffer) soundRotor.play();
+            } else {
+                if (soundRotor.isPlaying) soundRotor.stop();
+                if (soundCannon.isPlaying) soundCannon.stop(); // Stop gun if shooting while switching
+            }
+            // ------------------------------------
+
             document.getElementById('speed-gauge').style.display = isFly ? 'block' : 'none';
             crosshair.style.display = isFly ? 'block' : 'none';
             if (cockpit) cockpit.visible = isFly;
@@ -378,7 +427,7 @@
                 const mat = new THREE.SpriteMaterial({ 
                     map: weapon.smokeTexture, 
                     transparent: true, 
-                    opacity: 0.8, // Start semi-transparent
+                    opacity: 1, // Start semi-transparent
                     depthWrite: false,
                     rotation: Math.random() * Math.PI * 2 // Random starting rotation
                 });

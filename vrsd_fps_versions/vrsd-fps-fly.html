@@ -1,0 +1,308 @@
+--- START OF FILE vrsd-fps.html ---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D First Person Environment - Heli Physics V6</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
+        #info {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: auto; min-width: 500px; text-align: center; color: white;
+            background-color: rgba(0, 0, 0, 0.8); padding: 15px; z-index: 99;
+            border: 2px solid #555; font-size: 1.2rem;
+        }
+        #info.collapsed #info-text, #info.collapsed #mode-toggle, #info.collapsed #speed-gauge { display: none; }
+        #info.collapsed { min-width: 120px; padding: 5px; }
+        
+        .btn-container { margin-top: 10px; display: flex; gap: 10px; justify-content: center; }
+        button {
+            background: #444; color: #fff; border: 1px solid #777;
+            font-family: 'VT323', monospace; cursor: pointer; padding: 5px 15px; font-size: 1rem;
+        }
+        button:hover { background: #666; }
+        #mode-toggle { background: #2a5a2a; border-color: #4a8a4a; }
+        #mode-toggle.flying { background: #5a2a2a; border-color: #8a4a4a; }
+        
+        #speed-gauge { color: #00ff00; font-weight: bold; margin-top: 5px; display: none; }
+
+        #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px;
+            border-radius: 10px; font-size: 1.5rem; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="info">
+        <div id="info-text">
+            <span id="control-hint">WASD to move, Mouse to look, SPACE to jump.</span><br>
+            Click to start. ESC to unlock.
+        </div>
+        <div id="speed-gauge">PWR: 0% | SPD: 0 | YAW: 0 | V-LIFT: 0 | [FREE LOOK OFF]</div>
+        <div class="btn-container">
+            <button id="mode-toggle">Switch to Flight Mode</button>
+            <button id="info-toggle">Close Controls</button>
+        </div>
+    </div>
+
+    <div id="loading">Loading 3D Environment...</div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+
+    <script>
+        const player = {
+            mode: 'walk',
+            height: 1.8,
+            velocity: new THREE.Vector3(),
+            euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            
+            // Flight specific physics
+            flyPitch: 0,
+            flyRoll: 0,
+            
+            // Free Look (Head)
+            lookPitch: 0,
+            lookYaw: 0,
+
+            // Throttle Physics
+            forwardThrottle: 0,
+            targetThrottle: 0,
+            throttleAcceleration: 0.005,
+            
+            // Pivot Physics
+            yawVelocity: 0,
+            yawAcceleration: 0.0015,
+            yawDamping: 0.94,
+            maxYawSpeed: 0.04,
+
+            // Vertical Physics
+            verticalVelocity: 0,
+            verticalAcceleration: 0.006,
+            verticalDamping: 0.96,
+            maxVerticalSpeed: 0.25,
+            
+            // Constants
+            gravity: -0.005,
+            walkSpeed: 0.15,
+            
+            keys: { forward: false, backward: false, left: false, right: false, jump: false, shift: false },
+            lockControls: false
+        };
+
+        const infoBar = document.getElementById('info');
+        const infoToggle = document.getElementById('info-toggle');
+        const modeToggle = document.getElementById('mode-toggle');
+        const controlHint = document.getElementById('control-hint');
+        const speedGauge = document.getElementById('speed-gauge');
+
+        modeToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (player.mode === 'walk') {
+                player.mode = 'fly';
+                modeToggle.textContent = 'Switch to Walk Mode';
+                modeToggle.classList.add('flying');
+                controlHint.innerHTML = "W/S: Alt | A/D: Pivot | Scroll: PWR | Mouse: Tilt | SHIFT: Look Around";
+                speedGauge.style.display = 'block';
+            } else {
+                player.mode = 'walk';
+                modeToggle.textContent = 'Switch to Flight Mode';
+                modeToggle.classList.remove('flying');
+                controlHint.innerHTML = "WASD to move, Mouse to look, SPACE to jump.";
+                speedGauge.style.display = 'none';
+                player.flyPitch = 0; player.flyRoll = 0;
+                player.lookPitch = 0; player.lookYaw = 0;
+                player.forwardThrottle = 0; player.targetThrottle = 0;
+                player.yawVelocity = 0; player.verticalVelocity = 0;
+            }
+        });
+
+        infoToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            infoBar.classList.toggle('collapsed');
+            infoToggle.textContent = infoBar.classList.contains('collapsed') ? 'Show' : 'Close Controls';
+        });
+
+        const canvas = document.getElementById('canvas');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        scene.add(new THREE.AmbientLight(0xffde77, 0.4));
+        const sun = new THREE.DirectionalLight(0xffff86, 0.8);
+        sun.position.set(70, 70, -20);
+        scene.add(sun);
+
+        let collisionObjects = [];
+        const loadingManager = new THREE.LoadingManager(() => { document.getElementById('loading').style.display = 'none'; });
+        const loader = new THREE.GLTFLoader(loadingManager);
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+        
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+            gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
+            scene.add(gltf.scene);
+        });
+
+        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+            t.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = t;
+            scene.environment = t;
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = true;
+            if (e.code === 'KeyS') player.keys.backward = true;
+            if (e.code === 'KeyA') player.keys.left = true;
+            if (e.code === 'KeyD') player.keys.right = true;
+            if (e.code === 'Space') player.keys.jump = true;
+            if (e.shiftKey) player.keys.shift = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = false;
+            if (e.code === 'KeyS') player.keys.backward = false;
+            if (e.code === 'KeyA') player.keys.left = false;
+            if (e.code === 'KeyD') player.keys.right = false;
+            if (e.code === 'Space') player.keys.jump = false;
+            if (!e.shiftKey) {
+                player.keys.shift = false;
+                // Optional: Snap head back to front when letting go of shift
+                player.lookPitch = 0;
+                player.lookYaw = 0;
+            }
+        });
+
+        window.addEventListener('wheel', (e) => {
+            if (player.mode === 'fly') {
+                player.targetThrottle -= e.deltaY * 0.0005;
+                player.targetThrottle = Math.max(0, Math.min(1.5, player.targetThrottle));
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('click', () => { if(!player.lockControls) canvas.requestPointerLock(); });
+        document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === canvas);
+
+        document.addEventListener('mousemove', (e) => {
+            if (!player.lockControls) return;
+
+            if (player.mode === 'walk') {
+                player.euler.y -= e.movementX * 0.002;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - e.movementY * 0.002));
+            } else {
+                if (player.keys.shift) {
+                    // FREE LOOK (Pilot's Head)
+                    player.lookYaw -= e.movementX * 0.002;
+                    player.lookPitch -= e.movementY * 0.002;
+                    // Clamp head look to prevent Exorcist-style neck snaps
+                    player.lookPitch = Math.max(-1.2, Math.min(1.2, player.lookPitch));
+                    player.lookYaw = Math.max(-1.8, Math.min(1.8, player.lookYaw));
+                } else {
+                    // CYCLIC (Helicopter Tilt)
+                    player.flyPitch -= e.movementY * 0.001;
+                    player.flyRoll -= e.movementX * 0.001;
+                    player.flyPitch = Math.max(-0.8, Math.min(0.8, player.flyPitch));
+                    player.flyRoll = Math.max(-0.8, Math.min(0.8, player.flyRoll));
+                }
+            }
+        });
+
+        function updatePhysics() {
+            if (player.mode === 'walk') {
+                const ray = new THREE.Raycaster(camera.position, new THREE.Vector3(0, -1, 0));
+                const inter = ray.intersectObjects(collisionObjects);
+                let grounded = inter.length > 0 && inter[0].distance < player.height + 0.2;
+
+                if (!grounded) player.velocity.y += player.gravity;
+                else {
+                    if (player.velocity.y < 0) player.velocity.y = 0;
+                    if (player.keys.jump) player.velocity.y = 0.15;
+                    camera.position.y = inter[0].point.y + player.height;
+                }
+
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(camera.up, dir).negate();
+
+                if (player.keys.forward) camera.position.addScaledVector(dir, player.walkSpeed);
+                if (player.keys.backward) camera.position.addScaledVector(dir, -player.walkSpeed);
+                if (player.keys.left) camera.position.addScaledVector(side, -player.walkSpeed);
+                if (player.keys.right) camera.position.addScaledVector(side, player.walkSpeed);
+                
+                camera.position.y += player.velocity.y;
+                camera.quaternion.setFromEuler(player.euler);
+
+            } else {
+                // HELICOPTER FLIGHT PHYSICS
+                
+                // 1. Engine & Throttle
+                const throttleDiff = player.targetThrottle - player.forwardThrottle;
+                player.forwardThrottle += throttleDiff * player.throttleAcceleration;
+
+                // 2. Vertical Lift (W/S)
+                if (player.keys.forward) player.verticalVelocity += player.verticalAcceleration;
+                else if (player.keys.backward) player.verticalVelocity -= player.verticalAcceleration;
+                player.verticalVelocity *= player.verticalDamping;
+                player.verticalVelocity = Math.max(-player.maxVerticalSpeed, Math.min(player.maxVerticalSpeed, player.verticalVelocity));
+                camera.position.y += player.verticalVelocity;
+
+                // 3. Smooth Pivot (A/D)
+                if (player.keys.left) player.yawVelocity += player.yawAcceleration;
+                else if (player.keys.right) player.yawVelocity -= player.yawAcceleration;
+                player.yawVelocity *= player.yawDamping;
+                player.yawVelocity = Math.max(-player.maxYawSpeed, Math.min(player.maxYawSpeed, player.yawVelocity));
+                player.euler.y += player.yawVelocity;
+
+                // 4. Horizontal Movement (Heading-based)
+                const currentYawEuler = new THREE.Euler(0, player.euler.y, 0);
+                const forwardHeading = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion().setFromEuler(currentYawEuler));
+                const sideHeading = new THREE.Vector3(1, 0, 0).applyQuaternion(new THREE.Quaternion().setFromEuler(currentYawEuler));
+
+                camera.position.addScaledVector(forwardHeading, player.forwardThrottle);
+                camera.position.addScaledVector(forwardHeading, -player.flyPitch * 0.25);
+                camera.position.addScaledVector(sideHeading, -player.flyRoll * 0.25);
+
+                // 5. COMBINED ROTATION (Heli Tilt + Head Look)
+                const heliQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+                const headQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
+                
+                // Multiply them: Body Orientation * Head Offset
+                camera.quaternion.multiplyQuaternions(heliQuaternion, headQuaternion);
+                
+                // Update UI Gauge
+                const pwr = (player.targetThrottle * 100).toFixed(0);
+                const spd = (player.forwardThrottle * 100).toFixed(0);
+                const yaw = Math.abs((player.yawVelocity / player.maxYawSpeed) * 100).toFixed(0);
+                const lift = (player.verticalVelocity * 400).toFixed(0);
+                const lookMode = player.keys.shift ? "[FREE LOOK ON]" : "[FREE LOOK OFF]";
+                speedGauge.textContent = `PWR: ${pwr}% | SPD: ${spd} | YAW: ${yaw}% | V-LIFT: ${lift} | ${lookMode}`;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            renderer.render(scene, camera);
+        }
+
+        camera.position.set(155, 6, 8);
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

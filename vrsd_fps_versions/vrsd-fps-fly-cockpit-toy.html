@@ -1,0 +1,340 @@
+--- START OF FILE vrsd-fps.html ---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Toy Apache Simulator</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
+        #info {
+            position: absolute; top: 20px; right: 20px; width: auto; min-width: 350px; 
+            text-align: right; color: white; background-color: rgba(0, 0, 0, 0.8); 
+            padding: 15px; z-index: 99; border: 2px solid #555; font-size: 1.1rem;
+        }
+        #info.collapsed #info-text, #info.collapsed #speed-gauge, #info.collapsed #mode-toggle, #info.collapsed .settings-row { display: none; }
+        #info.collapsed { min-width: 100px; padding: 10px; }
+        
+        .btn-container { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end; }
+        .settings-row { margin-top: 5px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+        
+        button {
+            background: #444; color: #fff; border: 1px solid #777;
+            font-family: 'VT323', monospace; cursor: pointer; padding: 5px 15px; font-size: 1rem;
+        }
+        button:hover { background: #666; }
+        #mode-toggle { background: #2a5a2a; border-color: #4a8a4a; }
+        #mode-toggle.flying { background: #5a2a2a; border-color: #8a4a4a; }
+        
+        input[type=range] { cursor: pointer; background: #444; }
+
+        #speed-gauge { color: #00ff00; font-weight: bold; margin-top: 5px; display: none; }
+        #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px;
+            border-radius: 10px; font-size: 1.5rem; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        <div id="info-text">
+            <span id="control-hint">WASD: Move | Mouse: Look | SPACE: Jump | R: Run</span><br>
+            <b style="color:#ffcc00">TOY MODE ACTIVE IN FLIGHT</b>
+        </div>
+        <div id="speed-gauge">PWR: 0% | SPD: 0 | YAW: 0 | [FREE LOOK OFF]</div>
+        
+        <div class="settings-row">
+            <label for="bright-slider">BRIGHTNESS: </label>
+            <input type="range" id="bright-slider" min="0" max="2" step="0.1" value="1">
+        </div>
+        <div class="settings-row">
+            <label>SHADOWS: </label>
+            <input type="checkbox" id="shadow-toggle" checked>
+        </div>
+
+        <div class="btn-container">
+            <button id="mode-toggle">Switch to Flight Mode</button>
+            <button id="info-toggle">Close Controls</button>
+        </div>
+    </div>
+    <div id="loading">Loading Systems...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+
+    <script>
+        const player = {
+            mode: 'walk', height: 1.8, velocity: new THREE.Vector3(), euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            walkSpeed: 0.15, runSpeed: 0.3, isRunning: false,
+            jumpForce: 0.12, jumpCount: 0, maxJumps: 2, isGrounded: false,
+            flyPitch: 0, flyRoll: 0, lookPitch: 0, lookYaw: 0,
+            forwardThrottle: 0, targetThrottle: 0,
+            yawVelocity: 0, verticalVelocity: 0,
+            cockpitOffset: new THREE.Vector3(0, 0, 0), 
+            keys: { forward: false, backward: false, left: false, right: false, jump: false, shift: false },
+            lockControls: false
+        };
+
+        const infoBar = document.getElementById('info');
+        const infoToggle = document.getElementById('info-toggle');
+        const modeBtn = document.getElementById('mode-toggle');
+        const brightSlider = document.getElementById('bright-slider');
+        const shadowToggle = document.getElementById('shadow-toggle');
+
+        infoToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            infoBar.classList.toggle('collapsed');
+            infoToggle.textContent = infoBar.classList.contains('collapsed') ? 'Show' : 'Close Controls';
+        });
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 5000);
+        const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        
+        // ORIGINAL LIGHTING RESTORED
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2);
+        scene.add(ambientLight);
+        
+        const sun = new THREE.DirectionalLight(0xffff86, 0.7);
+        sun.position.set(70, 70, -20);
+        sun.castShadow = true;
+        sun.shadow.mapSize.width = 4096;
+        sun.shadow.mapSize.height = 4096;
+        sun.shadow.bias = -0.001;
+        scene.add(sun);
+
+        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2);
+        scene.add(hemisphereLight);
+
+        // UI Listeners
+        brightSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            ambientLight.intensity = 0.2 * val;
+            sun.intensity = 0.7 * val;
+            hemisphereLight.intensity = 0.2 * val;
+        });
+        brightSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+        shadowToggle.addEventListener('change', (e) => { sun.castShadow = e.target.checked; });
+        shadowToggle.addEventListener('click', (e) => e.stopPropagation());
+
+        let envModel = null;
+        let cockpit = null;
+        let collisionObjects = [];
+        const loader = new THREE.GLTFLoader();
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+        
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+            envModel = gltf.scene;
+            envModel.scale.set(1.16, 1.16, 1.16); // Starting scale
+            envModel.traverse(c => { 
+                if(c.isMesh) { 
+                    c.material.side = THREE.DoubleSide; 
+                    c.castShadow = true;
+                    c.receiveShadow = true;
+                    collisionObjects.push(c); 
+                } 
+            });
+            scene.add(envModel);
+            document.getElementById('loading').style.display = 'none';
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
+            cockpit = gltf.scene;
+            cockpit.traverse(child => { if (child.isMesh) child.material.side = THREE.DoubleSide; });
+            cockpit.visible = false;
+            scene.add(cockpit);
+        });
+
+        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+            t.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = t; scene.environment = t;
+        });
+
+        const raycaster = new THREE.Raycaster();
+
+        function checkCollisions(moveX, moveZ) {
+            if (collisionObjects.length === 0 || player.mode === 'fly') return true;
+            const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
+            let canMove = true;
+            checkPoints.forEach(point => {
+                const origin = new THREE.Vector3().copy(camera.position).add(point);
+                raycaster.ray.origin.copy(origin);
+                if (moveZ !== 0) {
+                    raycaster.ray.direction.set(0, 0, moveZ > 0 ? 1 : -1);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+                if (moveX !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(moveX > 0 ? 1 : -1, 0, 0);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+            });
+            return canMove;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = true;
+            if (e.code === 'KeyS') player.keys.backward = true;
+            if (e.code === 'KeyA') player.keys.left = true;
+            if (e.code === 'KeyD') player.keys.right = true;
+            if (e.code === 'KeyR') player.isRunning = !player.isRunning;
+            if (e.code === 'Space') player.keys.jump = true;
+            if (e.shiftKey) player.keys.shift = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = false;
+            if (e.code === 'KeyS') player.keys.backward = false;
+            if (e.code === 'KeyA') player.keys.left = false;
+            if (e.code === 'KeyD') player.keys.right = false;
+            if (e.code === 'Space') player.keys.jump = false;
+            if (!e.shiftKey) { player.keys.shift = false; player.lookPitch = 0; player.lookYaw = 0; }
+        });
+        window.addEventListener('wheel', (e) => {
+            if (player.mode === 'fly') player.targetThrottle = Math.max(0, Math.min(1.5, player.targetThrottle - e.deltaY * 0.0005));
+        });
+
+        modeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const toyScale = 1;
+            const originalScale = 1.16;
+
+            if (player.mode === 'walk') {
+                // SWITCHING TO TOY FLIGHT
+                player.mode = 'fly';
+                if(envModel) envModel.scale.set(originalScale * toyScale, originalScale * toyScale, originalScale * toyScale);
+                // Move camera to maintain relative position
+                camera.position.x *= toyScale;
+                camera.position.z *= toyScale;
+                camera.position.y *= toyScale;
+                
+                modeBtn.textContent = 'Switch to Walk Mode';
+                modeBtn.classList.add('flying');
+                document.getElementById('speed-gauge').style.display = 'block';
+                if (cockpit) cockpit.visible = true;
+                document.getElementById('control-hint').innerHTML = "TOY MODE: Everything is 10x bigger!";
+            } else {
+                // SWITCHING TO HUMAN WALK
+                player.mode = 'walk';
+                if(envModel) envModel.scale.set(originalScale, originalScale, originalScale);
+                // Move camera back
+                camera.position.x /= toyScale;
+                camera.position.z /= toyScale;
+                camera.position.y = player.height; // Snap to human height
+                
+                modeBtn.textContent = 'Switch to Flight Mode';
+                modeBtn.classList.remove('flying');
+                document.getElementById('speed-gauge').style.display = 'none';
+                if (cockpit) cockpit.visible = false;
+                document.getElementById('control-hint').innerHTML = "WASD: Move | Mouse: Look | SPACE: Jump | R: Run";
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!player.lockControls) return;
+            if (player.mode === 'walk') {
+                player.euler.y -= e.movementX * 0.002;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - e.movementY * 0.002));
+            } else {
+                if (player.keys.shift) {
+                    player.lookYaw -= e.movementX * 0.002;
+                    player.lookPitch = Math.max(-1.2, Math.min(1.2, player.lookPitch - e.movementY * 0.002));
+                } else {
+                    player.flyPitch = Math.max(-0.8, Math.min(0.8, player.flyPitch - e.movementY * 0.001));
+                    player.flyRoll = Math.max(-0.8, Math.min(0.8, player.flyRoll - e.movementX * 0.001));
+                }
+            }
+        });
+
+        document.getElementById('canvas').addEventListener('click', () => { document.getElementById('canvas').requestPointerLock(); });
+        document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === document.getElementById('canvas'));
+
+        function update() {
+            if (player.mode === 'walk') {
+                raycaster.set(camera.position, new THREE.Vector3(0,-1,0));
+                const inter = raycaster.intersectObjects(collisionObjects);
+                player.isGrounded = inter.length > 0 && inter[0].distance < player.height + 0.3;
+
+                if (!player.isGrounded) {
+                    player.velocity.y -= 0.005;
+                } else {
+                    if (player.velocity.y <= 0) {
+                        player.velocity.y = 0;
+                        player.jumpCount = 0;
+                        camera.position.y = inter[0].point.y + player.height;
+                    }
+                }
+                if (player.keys.jump && (player.isGrounded || player.jumpCount < player.maxJumps)) {
+                    player.velocity.y = player.jumpForce;
+                    player.jumpCount++;
+                    player.keys.jump = false; 
+                }
+
+                const speed = player.isRunning ? player.runSpeed : player.walkSpeed;
+                const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion); dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir);
+
+                if (checkCollisions((player.keys.left ? speed : 0) + (player.keys.right ? -speed : 0), (player.keys.forward ? speed : 0) + (player.keys.backward ? -speed : 0))) {
+                    if(player.keys.forward) camera.position.addScaledVector(dir, speed);
+                    if(player.keys.backward) camera.position.addScaledVector(dir, -speed);
+                    if(player.keys.left) camera.position.addScaledVector(side, speed);
+                    if(player.keys.right) camera.position.addScaledVector(side, -speed);
+                }
+                camera.position.y += player.velocity.y;
+                camera.quaternion.setFromEuler(player.euler);
+
+            } else {
+                // Flight Physics
+                player.forwardThrottle += (player.targetThrottle - player.forwardThrottle) * 0.005;
+                // Scale movement speed for Toy Mode (Toy feels fast in big world)
+                const toySpeedMult = 5.0; 
+                
+                if (player.keys.forward) player.verticalVelocity += 0.006 * toySpeedMult;
+                else if (player.keys.backward) player.verticalVelocity -= 0.006 * toySpeedMult;
+                player.verticalVelocity *= 0.96; camera.position.y += player.verticalVelocity;
+                
+                if (player.keys.left) player.yawVelocity += 0.0015;
+                else if (player.keys.right) player.yawVelocity -= 0.0015;
+                player.yawVelocity *= 0.94; player.euler.y += player.yawVelocity;
+                
+                const curYaw = new THREE.Euler(0, player.euler.y, 0);
+                const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                
+                camera.position.addScaledVector(fwd, (player.forwardThrottle + (-player.flyPitch * 0.25)) * toySpeedMult);
+                camera.position.addScaledVector(sid, -player.flyRoll * 0.25 * toySpeedMult);
+                
+                const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+                const headQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
+                camera.quaternion.multiplyQuaternions(heliQ, headQ);
+
+                if (cockpit) {
+                    cockpit.quaternion.copy(heliQ);
+                    const offset = player.cockpitOffset.clone().applyQuaternion(heliQ);
+                    cockpit.position.copy(camera.position).add(offset);
+                }
+                document.getElementById('speed-gauge').textContent = `TOY PWR: ${(player.targetThrottle*100).toFixed(0)}% | SPD: ${(player.forwardThrottle*100).toFixed(0)}`;
+            }
+        }
+
+        function animate() { requestAnimationFrame(animate); update(); renderer.render(scene, camera); }
+        camera.position.set(155, 6, 8);
+        animate();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

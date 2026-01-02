@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AH-64 Apache Simulator - IHADSS Gun System</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
+        
+        /* --- UI OVERLAYS --- */
+        #info {
+            position: absolute; top: 20px; right: 20px; width: auto; min-width: 350px; 
+            text-align: right; color: white; background-color: rgba(0, 0, 0, 0.8); 
+            padding: 15px; z-index: 99; border: 2px solid #555; font-size: 1.1rem;
+        }
+        #info.collapsed #info-text, #info.collapsed #speed-gauge, #info.collapsed #mode-toggle, #info.collapsed .settings-row { display: none; }
+        #info.collapsed { min-width: 100px; padding: 10px; }
+        
+        .btn-container { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end; }
+        .settings-row { margin-top: 5px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+        
+        button {
+            background: #444; color: #fff; border: 1px solid #777;
+            font-family: 'VT323', monospace; cursor: pointer; padding: 5px 15px; font-size: 1rem;
+        }
+        button:hover { background: #666; }
+        #mode-toggle { background: #2a5a2a; border-color: #4a8a4a; }
+        #mode-toggle.flying { background: #5a2a2a; border-color: #8a4a4a; }
+        
+        input[type=range] { cursor: pointer; background: #444; }
+
+        #speed-gauge { color: #00ff00; font-weight: bold; margin-top: 5px; display: none; }
+        #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px;
+            border-radius: 10px; font-size: 1.5rem; z-index: 100;
+        }
+
+        /* --- CROSSHAIR STYLES --- */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px; height: 40px;
+            pointer-events: none; 
+            display: none; 
+            z-index: 50;
+        }
+        .ch-part { position: absolute; background: rgba(255, 255, 255, 0.9); box-shadow: 0 0 2px black; }
+        .ch-top { width: 2px; height: 12px; top: 0; left: 19px; }
+        .ch-bottom { width: 2px; height: 12px; bottom: 0; left: 19px; }
+        .ch-left { width: 12px; height: 2px; left: 0; top: 19px; }
+        .ch-right { width: 12px; height: 2px; right: 0; top: 19px; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="crosshair">
+        <div class="ch-part ch-top"></div>
+        <div class="ch-part ch-bottom"></div>
+        <div class="ch-part ch-left"></div>
+        <div class="ch-part ch-right"></div>
+    </div>
+
+    <div id="info">
+        <div id="info-text">
+            <span id="control-hint">WASD: Move | Mouse: Look | SPACE: Jump | R: Run</span><br>
+            <b>Click screen to start.</b> ESC to unlock.
+        </div>
+        <div id="speed-gauge">PWR: 0% | SPD: 0 | YAW: 0 | [FREE LOOK OFF]</div>
+        
+        <div class="settings-row">
+            <label for="bright-slider">BRIGHTNESS: </label>
+            <input type="range" id="bright-slider" min="0" max="2" step="0.1" value="1">
+        </div>
+        <div class="settings-row">
+            <label>SHADOWS: </label>
+            <input type="checkbox" id="shadow-toggle" checked>
+        </div>
+        <div class="settings-row">
+            <label>SWAP A/D & MOUSE: </label>
+            <input type="checkbox" id="control-swap">
+        </div>
+
+        <div class="btn-container">
+            <button id="mode-toggle">Switch to Flight Mode</button>
+            <button id="info-toggle">Close Controls</button>
+        </div>
+    </div>
+    <div id="loading">Loading Systems...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+
+    <script>
+        const player = {
+            mode: 'walk', height: 1.8, velocity: new THREE.Vector3(), euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            walkSpeed: 0.15, runSpeed: 0.3, isRunning: false,
+            jumpForce: 0.12, jumpCount: 0, maxJumps: 2, isGrounded: false,
+            flyPitch: 0, flyRoll: 0, lookPitch: 0, lookYaw: 0,
+            forwardThrottle: 0, targetThrottle: 0,
+            yawVelocity: 0, verticalVelocity: 0,
+            cockpitOffset: new THREE.Vector3(0, 0, 0), 
+            keys: { forward: false, backward: false, left: false, right: false, jump: false, shift: false },
+            lockControls: false,
+            swapControls: false 
+        };
+
+        const weapon = {
+            isFiring: false,
+            lastFired: 0,
+            fireRate: 80, 
+            speed: 5.0,   
+            spread: 0.05, 
+            bullets: [],  
+            template: null 
+        };
+
+        const infoBar = document.getElementById('info');
+        const infoToggle = document.getElementById('info-toggle');
+        const modeBtn = document.getElementById('mode-toggle');
+        const brightSlider = document.getElementById('bright-slider');
+        const shadowToggle = document.getElementById('shadow-toggle');
+        const swapControlToggle = document.getElementById('control-swap');
+        const crosshair = document.getElementById('crosshair');
+
+        infoToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            infoBar.classList.toggle('collapsed');
+            infoToggle.textContent = infoBar.classList.contains('collapsed') ? 'Show' : 'Close Controls';
+        });
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
+        const renderer = new THREE.WebGLRenderer({ 
+            canvas: document.getElementById('canvas'), 
+            antialias: true,
+            powerPreference: "high-performance" 
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2); 
+        scene.add(ambientLight);
+        
+        const sun = new THREE.DirectionalLight(0xffff86, 0.7); 
+        sun.position.set(70, 70, -20);
+        sun.castShadow = true;
+        sun.shadow.mapSize.width = 4096;
+        sun.shadow.mapSize.height = 4096;
+        sun.shadow.bias = -0.001;
+        scene.add(sun);
+
+        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2); 
+        scene.add(hemisphereLight);
+
+        brightSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            ambientLight.intensity = 0.2 * val;
+            sun.intensity = 0.7 * val;
+            hemisphereLight.intensity = 0.2 * val;
+        });
+        brightSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+        
+        shadowToggle.addEventListener('change', (e) => { sun.castShadow = e.target.checked; });
+        shadowToggle.addEventListener('click', (e) => e.stopPropagation());
+
+        swapControlToggle.addEventListener('change', (e) => {
+            player.swapControls = e.target.checked;
+            player.yawVelocity = 0;
+            player.flyRoll = 0;
+            updateControlHint();
+        });
+        swapControlToggle.addEventListener('click', (e) => e.stopPropagation());
+
+        let cockpit = null;
+        let collisionObjects = [];
+        const loader = new THREE.GLTFLoader();
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+        
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+            gltf.scene.traverse(c => { 
+                if(c.isMesh) { 
+                    c.material.side = THREE.DoubleSide; 
+                    c.castShadow = true;
+                    c.receiveShadow = true;
+                    collisionObjects.push(c); 
+                } 
+            });
+            scene.add(gltf.scene);
+            document.getElementById('loading').style.display = 'none';
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
+            cockpit = gltf.scene;
+            cockpit.traverse(child => { 
+                if (child.isMesh) {
+                    child.material.side = THREE.DoubleSide; 
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            cockpit.visible = false;
+            scene.add(cockpit);
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
+            weapon.template = gltf.scene;
+            weapon.template.traverse(c => {
+                if(c.isMesh) {
+                    c.castShadow = true;
+                    c.receiveShadow = false;
+                }
+            });
+            weapon.template.scale.set(1, 1, 1);
+        });
+
+        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+            t.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = t; scene.environment = t;
+        });
+
+        const raycaster = new THREE.Raycaster();
+
+        function checkCollisions(moveX, moveZ) {
+            if (collisionObjects.length === 0) return true;
+            const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
+            let canMove = true;
+            checkPoints.forEach(point => {
+                const origin = new THREE.Vector3().copy(camera.position).add(point);
+                if (moveZ !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(0, 0, moveZ > 0 ? 1 : -1);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+                if (moveX !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(moveX > 0 ? 1 : -1, 0, 0);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+            });
+            return canMove;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = true;
+            if (e.code === 'KeyS') player.keys.backward = true;
+            if (e.code === 'KeyA') player.keys.left = true;
+            if (e.code === 'KeyD') player.keys.right = true;
+            if (e.code === 'KeyR') player.isRunning = !player.isRunning;
+            if (e.code === 'Space') player.keys.jump = true;
+            if (e.shiftKey) player.keys.shift = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = false;
+            if (e.code === 'KeyS') player.keys.backward = false;
+            if (e.code === 'KeyA') player.keys.left = false;
+            if (e.code === 'KeyD') player.keys.right = false;
+            if (e.code === 'Space') player.keys.jump = false;
+            if (!e.shiftKey) { player.keys.shift = false; player.lookPitch = 0; player.lookYaw = 0; }
+        });
+        window.addEventListener('wheel', (e) => {
+            if (player.mode === 'fly') player.targetThrottle = Math.max(0, Math.min(1.5, player.targetThrottle - e.deltaY * 0.0005));
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && player.lockControls && player.mode === 'fly') {
+                weapon.isFiring = true;
+            }
+        });
+        document.addEventListener('mouseup', () => weapon.isFiring = false);
+
+
+        function updateControlHint() {
+            if (player.mode === 'walk') {
+                document.getElementById('control-hint').innerHTML = "WASD: Move | Mouse: Look | SPACE: Jump | R: Run";
+            } else {
+                if (player.swapControls) {
+                    document.getElementById('control-hint').innerHTML = "W/S: Alt | A/D: <b>Slide</b> | Mouse: <b>Pivot</b> | L-Click: <b>Fire</b> | SHIFT: Head";
+                } else {
+                    document.getElementById('control-hint').innerHTML = "W/S: Alt | A/D: <b>Pivot</b> | Mouse: <b>Tilt</b> | L-Click: <b>Fire</b> | SHIFT: Head";
+                }
+            }
+        }
+
+        modeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            player.mode = (player.mode === 'walk') ? 'fly' : 'walk';
+            weapon.isFiring = false;
+            const isFly = player.mode === 'fly';
+            modeBtn.textContent = isFly ? 'Switch to Walk Mode' : 'Switch to Flight Mode';
+            modeBtn.classList.toggle('flying', isFly);
+            document.getElementById('speed-gauge').style.display = isFly ? 'block' : 'none';
+            crosshair.style.display = isFly ? 'block' : 'none';
+            if (cockpit) cockpit.visible = isFly;
+            updateControlHint();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!player.lockControls) return;
+            if (player.mode === 'walk') {
+                player.euler.y -= e.movementX * 0.002;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - e.movementY * 0.002));
+            } else {
+                if (player.keys.shift) {
+                    player.lookYaw -= e.movementX * 0.002;
+                    player.lookPitch = Math.max(-1.2, Math.min(1.2, player.lookPitch - e.movementY * 0.002));
+                } else {
+                    player.flyPitch = Math.max(-0.8, Math.min(0.8, player.flyPitch - e.movementY * 0.001));
+                    if (player.swapControls) {
+                        player.yawVelocity -= e.movementX * 0.0001; 
+                    } else {
+                        player.flyRoll = Math.max(-0.8, Math.min(0.8, player.flyRoll - e.movementX * 0.001));
+                    }
+                }
+            }
+        });
+
+        document.getElementById('canvas').addEventListener('click', () => { document.getElementById('canvas').requestPointerLock(); });
+        document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === document.getElementById('canvas'));
+
+        function update() {
+            const now = Date.now();
+
+            if (player.mode === 'walk') {
+                raycaster.set(camera.position, new THREE.Vector3(0,-1,0));
+                const inter = raycaster.intersectObjects(collisionObjects);
+                player.isGrounded = inter.length > 0 && inter[0].distance < player.height + 0.3;
+
+                if (!player.isGrounded) {
+                    player.velocity.y -= 0.005;
+                } else {
+                    if (player.velocity.y <= 0) {
+                        player.velocity.y = 0;
+                        player.jumpCount = 0;
+                        camera.position.y = inter[0].point.y + player.height;
+                    }
+                }
+
+                if (player.keys.jump && (player.isGrounded || player.jumpCount < player.maxJumps)) {
+                    player.velocity.y = player.jumpForce;
+                    player.jumpCount++;
+                    player.keys.jump = false; 
+                }
+
+                const speed = player.isRunning ? player.runSpeed : player.walkSpeed;
+                const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion); dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir);
+
+                if (checkCollisions((player.keys.left ? speed : 0) + (player.keys.right ? -speed : 0), (player.keys.forward ? speed : 0) + (player.keys.backward ? -speed : 0))) {
+                    if(player.keys.forward) camera.position.addScaledVector(dir, speed);
+                    if(player.keys.backward) camera.position.addScaledVector(dir, -speed);
+                    if(player.keys.left) camera.position.addScaledVector(side, speed);
+                    if(player.keys.right) camera.position.addScaledVector(side, -speed);
+                }
+
+                camera.position.y += player.velocity.y;
+                camera.quaternion.setFromEuler(player.euler);
+
+            } else {
+                player.forwardThrottle += (player.targetThrottle - player.forwardThrottle) * 0.005;
+                if (player.keys.forward) player.verticalVelocity += 0.006;
+                else if (player.keys.backward) player.verticalVelocity -= 0.006;
+                player.verticalVelocity *= 0.96; camera.position.y += player.verticalVelocity;
+                
+                if (player.swapControls) {
+                    if (player.keys.left) player.flyRoll = Math.min(player.flyRoll + 0.05, 0.5);
+                    else if (player.keys.right) player.flyRoll = Math.max(player.flyRoll - 0.05, -0.5);
+                    else player.flyRoll *= 0.92; 
+                    player.euler.y += player.yawVelocity;
+                    player.yawVelocity *= 0.96;
+                } else {
+                    if (player.keys.left) player.yawVelocity += 0.0015;
+                    else if (player.keys.right) player.yawVelocity -= 0.0015;
+                    player.yawVelocity *= 0.94; 
+                    player.euler.y += player.yawVelocity;
+                }
+
+                const curYaw = new THREE.Euler(0, player.euler.y, 0);
+                const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                
+                camera.position.addScaledVector(fwd, player.forwardThrottle + (-player.flyPitch * 0.25));
+                camera.position.addScaledVector(sid, -player.flyRoll * 0.25);
+                
+                // Helicopter Body Rotation (Pitch/Yaw/Roll)
+                const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+                // Head Look Rotation (Offset)
+                const headQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
+                
+                // Final Camera Rotation = Heli + Head
+                camera.quaternion.multiplyQuaternions(heliQ, headQ);
+
+                if (cockpit) {
+                    cockpit.quaternion.copy(heliQ);
+                    const offset = player.cockpitOffset.clone().applyQuaternion(heliQ);
+                    cockpit.position.copy(camera.position).add(offset);
+                }
+
+                // --- IHADSS WEAPON SYSTEM ---
+                if (weapon.isFiring && weapon.template && (now - weapon.lastFired > weapon.fireRate)) {
+                    const spawnOffset = new THREE.Vector3(0, -2, -3);
+                    
+                    // 1. POSITION: Apply ONLY Helicopter Rotation (Attached to Hull)
+                    spawnOffset.applyQuaternion(heliQ); 
+                    const spawnPos = camera.position.clone().add(spawnOffset);
+
+                    const bulletMesh = weapon.template.clone();
+                    bulletMesh.position.copy(spawnPos);
+                    
+                    const spreadX = (Math.random() - 0.5) * weapon.spread;
+                    const spreadY = (Math.random() - 0.5) * weapon.spread;
+                    const localDir = new THREE.Vector3(spreadX, spreadY, -1).normalize();
+                    
+                    // 2. DIRECTION: Apply Camera Rotation (Gun swivels to Look Direction)
+                    const velocity = localDir.applyQuaternion(camera.quaternion).multiplyScalar(weapon.speed);
+
+                    bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,-1), velocity.clone().normalize());
+
+                    scene.add(bulletMesh);
+                    weapon.bullets.push({ mesh: bulletMesh, velocity: velocity, life: 100 });
+                    weapon.lastFired = now;
+                }
+
+                for (let i = weapon.bullets.length - 1; i >= 0; i--) {
+                    const b = weapon.bullets[i];
+                    b.mesh.position.add(b.velocity); 
+                    b.life--; 
+                    
+                    if (b.life <= 0) {
+                        scene.remove(b.mesh);
+                        weapon.bullets.splice(i, 1);
+                    }
+                }
+                
+                document.getElementById('speed-gauge').textContent = `PWR: ${(player.targetThrottle*100).toFixed(0)}% | SPD: ${(player.forwardThrottle*100).toFixed(0)} | V-LIFT: ${(player.verticalVelocity*400).toFixed(0)} | ${player.keys.shift ? '[LOOK]' : '[FLY]'}`;
+            }
+        }
+
+        function animate() { requestAnimationFrame(animate); update(); renderer.render(scene, camera); }
+        camera.position.set(155, 6, 8);
+        animate();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

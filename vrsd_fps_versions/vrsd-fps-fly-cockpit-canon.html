@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - Impact FX</title>
+    <title>AH-64 Apache Simulator - Smoke FX</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -116,9 +116,11 @@
             speed: 4.0,   
             spread: 0.05, 
             bullets: [], 
-            explosions: [], // Array to manage active explosions
+            explosions: [], 
+            smokeParticles: [], // Array for smoke
             template: null,
-            burstTexture: null // Store the explosion texture
+            burstTexture: null,
+            smokeTexture: null // Store smoke texture
         };
 
         const infoBar = document.getElementById('info');
@@ -188,12 +190,18 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
-        // --- TEXTURE LOADER FOR EXPLOSION ---
+        // --- TEXTURE LOADERS ---
         const textureLoader = new THREE.TextureLoader();
+        
+        // 1. Explosion Sprite Sheet
         textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png', (t) => {
             weapon.burstTexture = t;
-            // Configure sprite sheet: 7 columns, 1 row
             t.repeat.set(1/7, 1);
+        });
+
+        // 2. Smoke Texture
+        textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/smoke_a.png', (t) => {
+            weapon.smokeTexture = t;
         });
 
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
@@ -337,34 +345,69 @@
         document.getElementById('canvas').addEventListener('click', () => { document.getElementById('canvas').requestPointerLock(); });
         document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === document.getElementById('canvas'));
 
-        // --- FX HELPER ---
+        // --- FX HELPER: EXPLOSION ---
         function createExplosion(position) {
-            if (!weapon.burstTexture) return;
+            if (weapon.burstTexture) {
+                const tex = weapon.burstTexture.clone();
+                tex.needsUpdate = true; 
+                const mat = new THREE.SpriteMaterial({ 
+                    map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending 
+                });
+                const sprite = new THREE.Sprite(mat);
+                sprite.position.copy(position);
+                sprite.scale.set(3, 3, 3); 
+                scene.add(sprite);
+                
+                weapon.explosions.push({
+                    mesh: sprite, texture: tex, currentFrame: 0, lastFrameTime: Date.now(), frameDuration: 30
+                });
+            }
+            createSmoke(position);
+        }
 
-            // We must clone the texture to allow individual offsets for animation
-            const tex = weapon.burstTexture.clone();
-            tex.needsUpdate = true; 
-            
-            const mat = new THREE.SpriteMaterial({ 
-                map: tex, 
-                transparent: true,
-                depthWrite: false, // Don't write to depth buffer (standard for particles)
-                blending: THREE.AdditiveBlending // Makes it look glowing
-            });
-            
-            const sprite = new THREE.Sprite(mat);
-            sprite.position.copy(position);
-            sprite.scale.set(3, 3, 3); // Explosion size
-            
-            scene.add(sprite);
-            
-            weapon.explosions.push({
-                mesh: sprite,
-                texture: tex,
-                currentFrame: 0,
-                lastFrameTime: Date.now(),
-                frameDuration: 30 // ms per frame (Speed of explosion)
-            });
+        // --- FX HELPER: SMOKE ---
+        function createSmoke(position) {
+            if (!weapon.smokeTexture) return;
+
+            // Spawn multiple smoke particles per explosion
+            for (let i = 0; i < 12; i++) {
+                const mat = new THREE.SpriteMaterial({ 
+                    map: weapon.smokeTexture, 
+                    transparent: true, 
+                    opacity: 0.8, // Start semi-transparent
+                    depthWrite: false,
+                    rotation: Math.random() * Math.PI * 2 // Random starting rotation
+                });
+
+                const sprite = new THREE.Sprite(mat);
+                
+                // Randomize spawn position slightly around the hit point
+                const offsetX = (Math.random() - 0.5) * 1.5;
+                const offsetZ = (Math.random() - 0.5) * 1.5;
+                const offsetY = Math.random() * 0.5;
+                
+                sprite.position.set(position.x + offsetX, position.y + offsetY, position.z + offsetZ);
+                
+                // Randomize scale
+                const scale = 2.0 + Math.random() * 1.5;
+                sprite.scale.set(scale, scale, scale);
+                
+                scene.add(sprite);
+
+                // Smoke Physics
+                const velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.05, // Slight spread X
+                    0.05 + Math.random() * 0.08,  // Upward Buoyancy
+                    (Math.random() - 0.5) * 0.05  // Slight spread Z
+                );
+
+                weapon.smokeParticles.push({
+                    mesh: sprite,
+                    velocity: velocity,
+                    life: 1.0, // Lifetime (100%)
+                    decay: 0.01 + Math.random() * 0.01 // Random fade speed
+                });
+            }
         }
 
         function update() {
@@ -466,29 +509,23 @@
                     weapon.lastFired = now;
                 }
 
-                // 2. Bullet Logic (Physics + Collision)
+                // 2. Bullet Logic
                 for (let i = weapon.bullets.length - 1; i >= 0; i--) {
                     const b = weapon.bullets[i];
                     
-                    // Collision Detection (Raycast forward before moving)
                     const direction = b.velocity.clone().normalize();
-                    const distance = b.velocity.length(); // How far it moves this frame
-                    
+                    const distance = b.velocity.length(); 
                     raycaster.set(b.mesh.position, direction);
                     
-                    // Only check against map objects
                     const hits = raycaster.intersectObjects(collisionObjects);
                     
                     if (hits.length > 0 && hits[0].distance <= distance) {
-                        // IMPACT!
                         createExplosion(hits[0].point);
-                        
                         scene.remove(b.mesh);
                         weapon.bullets.splice(i, 1);
-                        continue; // Skip movement
+                        continue; 
                     }
 
-                    // Move if no collision
                     b.mesh.position.add(b.velocity); 
                     b.life--; 
                     
@@ -501,21 +538,42 @@
                 // 3. Explosion Animation Logic
                 for (let i = weapon.explosions.length - 1; i >= 0; i--) {
                     const exp = weapon.explosions[i];
-                    
                     if (now - exp.lastFrameTime > exp.frameDuration) {
                         exp.currentFrame++;
                         exp.lastFrameTime = now;
-
                         if (exp.currentFrame > 6) {
-                            // Animation done
                             scene.remove(exp.mesh);
-                            exp.mesh.material.dispose(); // Cleanup material
-                            exp.texture.dispose(); // Cleanup texture clone
+                            exp.mesh.material.dispose(); 
+                            exp.texture.dispose();
                             weapon.explosions.splice(i, 1);
                         } else {
-                            // Update texture offset (shift 1/7th to the right)
                             exp.texture.offset.x = exp.currentFrame / 7;
                         }
+                    }
+                }
+
+                // 4. Smoke Particle Logic
+                for (let i = weapon.smokeParticles.length - 1; i >= 0; i--) {
+                    const s = weapon.smokeParticles[i];
+                    
+                    // Move
+                    s.mesh.position.add(s.velocity);
+                    
+                    // Drag (slow down horizontal movement)
+                    s.velocity.x *= 0.98;
+                    s.velocity.z *= 0.98;
+                    
+                    // Fade out
+                    s.life -= s.decay;
+                    s.mesh.material.opacity = s.life;
+                    
+                    // Expand
+                    s.mesh.scale.multiplyScalar(1.02); // Grow by 2% per frame
+                    
+                    if (s.life <= 0) {
+                        scene.remove(s.mesh);
+                        s.mesh.material.dispose();
+                        weapon.smokeParticles.splice(i, 1);
                     }
                 }
                 

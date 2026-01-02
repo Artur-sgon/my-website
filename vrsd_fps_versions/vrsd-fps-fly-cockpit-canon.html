@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AH-64 Apache Simulator - IHADSS Gun System</title>
+    <title>AH-64 Apache Simulator - Systems Fixed</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -112,9 +112,9 @@
         const weapon = {
             isFiring: false,
             lastFired: 0,
-            fireRate: 80, 
-            speed: 5.0,   
-            spread: 0.05, 
+            fireRate: 60, 
+            speed: 4.0,   
+            spread: 0.04, 
             bullets: [],  
             template: null 
         };
@@ -220,7 +220,7 @@
                     c.receiveShadow = false;
                 }
             });
-            weapon.template.scale.set(1, 1, 1);
+            weapon.template.scale.set(0.5, 0.5, 0.5);
         });
 
         new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
@@ -388,15 +388,14 @@
                 const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
                 
+                // --- RESTORED FLIGHT PHYSICS ---
+                // These lines were missing in previous version, restoring forward/strafing movement based on tilt
                 camera.position.addScaledVector(fwd, player.forwardThrottle + (-player.flyPitch * 0.25));
                 camera.position.addScaledVector(sid, -player.flyRoll * 0.25);
-                
-                // Helicopter Body Rotation (Pitch/Yaw/Roll)
+
                 const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
-                // Head Look Rotation (Offset)
                 const headQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
                 
-                // Final Camera Rotation = Heli + Head
                 camera.quaternion.multiplyQuaternions(heliQ, headQ);
 
                 if (cockpit) {
@@ -408,8 +407,6 @@
                 // --- IHADSS WEAPON SYSTEM ---
                 if (weapon.isFiring && weapon.template && (now - weapon.lastFired > weapon.fireRate)) {
                     const spawnOffset = new THREE.Vector3(0, -2, -3);
-                    
-                    // 1. POSITION: Apply ONLY Helicopter Rotation (Attached to Hull)
                     spawnOffset.applyQuaternion(heliQ); 
                     const spawnPos = camera.position.clone().add(spawnOffset);
 
@@ -420,10 +417,13 @@
                     const spreadY = (Math.random() - 0.5) * weapon.spread;
                     const localDir = new THREE.Vector3(spreadX, spreadY, -1).normalize();
                     
-                    // 2. DIRECTION: Apply Camera Rotation (Gun swivels to Look Direction)
                     const velocity = localDir.applyQuaternion(camera.quaternion).multiplyScalar(weapon.speed);
 
+                    // 1. Aim the bullet
                     bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,-1), velocity.clone().normalize());
+                    
+                    // 2. Apply Random Roll (Z-rotation)
+                    bulletMesh.rotateZ(Math.random() * Math.PI * 2);
 
                     scene.add(bulletMesh);
                     weapon.bullets.push({ mesh: bulletMesh, velocity: velocity, life: 100 });

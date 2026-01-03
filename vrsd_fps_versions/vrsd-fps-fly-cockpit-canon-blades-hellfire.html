@@ -616,7 +616,7 @@
                 }
 
                 if (blades) {
-                    bladeAngle += 0.35; 
+                    bladeAngle += 0.04; 
                     const bladeTilt = -0.1; 
                     const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), bladeTilt);
                     const bladeOffset = new THREE.Vector3(0, 2, 1.5); 
@@ -625,7 +625,9 @@
                     const spinQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bladeAngle);
                     blades.quaternion.copy(heliQ).multiply(tiltQ).multiply(spinQ);
                     blades.traverse(child => { 
-                        if(child.isMesh) { child.material.opacity = 0 + 1 * Math.sin(bladeAngle * 70); }
+                     if(child.isMesh) { 
+                        child.material.opacity = 0 + 1 * Math.sin(bladeAngle * 40); 
+                     }
                     });
                 }
 

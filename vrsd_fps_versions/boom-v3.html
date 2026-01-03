@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Missile Explosion Test Bench (Final Tuned v4)</title>
+    <title>Missile Explosion Test Bench (Gradient Trails)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #333; font-family: monospace; color: white; }
         #canvas { width: 100%; height: 100vh; display: block; }
@@ -66,18 +66,31 @@
         </div>
 
         <div class="tabs">
-            <button id="btn-fragA" class="tab-btn active" onclick="openTab('fragA')">FRAG A</button>
+            <button id="btn-fragA" class="tab-btn" onclick="openTab('fragA')">FRAG A</button>
             <button id="btn-fragB" class="tab-btn" onclick="openTab('fragB')">FRAG B</button>
             <button id="btn-smoke" class="tab-btn" onclick="openTab('smoke')">SMK</button>
             <button id="btn-fiery" class="tab-btn" onclick="openTab('fiery')">F-SMK</button>
             <button id="btn-burst" class="tab-btn" onclick="openTab('burst')">BURST</button>
             <button id="btn-ring" class="tab-btn" onclick="openTab('ring')">RING</button>
             <button id="btn-sring" class="tab-btn" onclick="openTab('sring')">S-RING</button>
+            <button id="btn-fdeb" class="tab-btn active" onclick="openTab('fdeb')">F-DEBRIS</button>
             <button id="btn-ground" class="tab-btn" onclick="openTab('ground')">ENV</button>
         </div>
 
+        <!-- FLAMING DEBRIS TAB -->
+        <div id="tab-fdeb" class="content active">
+            <h1>Flaming Debris <input type="checkbox" class="emitter-toggle" id="en-fdeb" checked></h1>
+            <div class="row"><label>Count:</label><input type="range" id="fd-count" min="1" max="20" value="8"><span class="val" id="v-fd-count">8</span></div>
+            <div class="row"><label>Speed:</label><input type="range" id="fd-speed" min="0.1" max="5.0" step="0.1" value="1.0"><span class="val" id="v-fd-speed">1.0</span></div>
+            <div class="row"><label>Spread:</label><input type="range" id="fd-spread" min="0.1" max="5.0" step="0.1" value="1.5"><span class="val" id="v-fd-spread">1.5</span></div>
+            <div class="row"><label>Spawn Rad:</label><input type="range" id="fd-radius" min="0.0" max="3.0" step="0.1" value="0.5"><span class="val" id="v-fd-radius">0.5</span></div>
+            <div class="row"><label>Grav:</label><input type="range" id="fd-grav" min="0.0" max="0.1" step="0.001" value="0.025"><span class="val" id="v-fd-grav">0.025</span></div>
+            <div class="row"><label>Trail Size:</label><input type="range" id="fd-size" min="0.1" max="5.0" step="0.1" value="2.0"><span class="val" id="v-fd-size">2.0</span></div>
+            <div class="row"><label>Trail Life:</label><input type="range" id="fd-decay" min="0.01" max="0.2" step="0.01" value="0.05"><span class="val" id="v-fd-decay">0.05</span></div>
+        </div>
+
         <!-- FRAGMENTS A TAB -->
-        <div id="tab-fragA" class="content active">
+        <div id="tab-fragA" class="content">
             <h1>Debris A (Dirt) <input type="checkbox" class="emitter-toggle" id="en-fragA" checked></h1>
             <div class="row"><label>Count:</label><input type="range" id="fa-count" min="10" max="200" value="84"><span class="val" id="v-fa-count">84</span></div>
             <div class="row"><label>Speed:</label><input type="range" id="fa-speed" min="0.1" max="5.0" step="0.1" value="0.7"><span class="val" id="v-fa-speed">0.7</span></div>
@@ -233,13 +246,14 @@
             
             // CONFIGURED DEFAULTS
             config: {
-                fragA: { enabled: true, count: 50, speed: 0.7, size: 3.4, decay: 0.02, gravity: 0.034 },
-                fragB: { enabled: true, count: 50, speed: 0.9, size: 0.6, decay: 0.032, gravity: 0.027 },
+                fragA: { enabled: true, count: 84, speed: 0.7, size: 3.4, decay: 0.02, gravity: 0.034 },
+                fragB: { enabled: true, count: 151, speed: 0.9, size: 0.6, decay: 0.032, gravity: 0.027 },
                 smoke: { enabled: true, count: 19, lift: 0.03, size: 3.8, decay: 0.014, grow: 1.009, spin: 0.06 },
                 fierySmoke: { enabled: true, count: 36, lift: 0.04, size: 1.9, decay: 0.023, grow: 1.003, spin: 0.06 },
                 burst: { enabled: true, count: 40, speed: 0.3, size: 4.6, decay: 0.02 },
                 ring: { enabled: true, count: 50, speed: 0.4, size: 1.7, lift: 0.03, decay: 0.026 },
-                smokeRing: { enabled: true, count: 54, speed: 0.6, size: 2.2, lift: 0.02, decay: 0.02 }
+                smokeRing: { enabled: true, count: 54, speed: 0.6, size: 2.2, lift: 0.02, decay: 0.02 },
+                fdeb: { enabled: true, count: 8, speed: 1.0, grav: 0.025, size: 2.0, decay: 0.05, radius: 0.5, spread: 1.5 }
             },
 
             trigger: function(pos) {
@@ -369,11 +383,60 @@
                         });
                     }
                 }
+
+                // 8. Flaming Debris
+                if (this.config.fdeb.enabled) {
+                    for (let i = 0; i < this.config.fdeb.count; i++) {
+                        // Position with Sphere Radius
+                        const offset = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize().multiplyScalar(Math.random() * this.config.fdeb.radius);
+                        const spawnPos = pos.clone().add(offset);
+                        if(spawnPos.y < 0) spawnPos.y = 0.5; // Prevent under ground spawn
+
+                        // Velocity with Spread
+                        // Base UP vector
+                        const dir = new THREE.Vector3(0, 1, 0);
+                        // Add spread jitter
+                        dir.x += (Math.random() - 0.5) * this.config.fdeb.spread;
+                        dir.z += (Math.random() - 0.5) * this.config.fdeb.spread;
+                        dir.normalize();
+
+                        const vel = dir.multiplyScalar(this.config.fdeb.speed * (0.8 + Math.random()));
+                        
+                        this.particles.push({ 
+                            type: 'flamingDebris', pos: spawnPos, velocity: vel, life: 1.5 
+                        });
+                    }
+                }
             },
 
             update: function() {
                 for (let i = this.particles.length - 1; i >= 0; i--) {
                     const p = this.particles[i];
+
+                    // --- FLAMING DEBRIS PHYSICS & TRAIL ---
+                    if (p.type === 'flamingDebris') {
+                        p.pos.add(p.velocity);
+                        p.velocity.y -= this.config.fdeb.grav; 
+                        p.life -= 0.02;
+
+                        // Trail Particle using NormalBlending so it can turn dark/smoke
+                        const mat = new THREE.SpriteMaterial({ 
+                            map: tBurst, transparent: true, depthWrite: false, blending: THREE.NormalBlending, rotation: Math.random()*6 
+                        });
+                        const sprite = new THREE.Sprite(mat);
+                        sprite.position.copy(p.pos);
+                        const s = this.config.fdeb.size * (0.5 + Math.random()*0.5);
+                        sprite.scale.set(s,s,s);
+                        scene.add(sprite);
+                        
+                        this.particles.push({ type: 'debrisFire', mesh: sprite, velocity: new THREE.Vector3(0,0,0), life: 1.0, rotSpeed: 0 });
+
+                        if (p.pos.y < 0) p.life = 0;
+                        if (p.life <= 0) this.particles.splice(i, 1);
+                        continue; 
+                    }
+
+                    // --- STANDARD PARTICLES ---
                     p.mesh.position.add(p.velocity);
                     p.mesh.material.rotation += p.rotSpeed;
 
@@ -418,6 +481,34 @@
                         }
                         p.mesh.material.opacity = p.life;
                     }
+                    else if (p.type === 'debrisFire') {
+                        p.velocity.multiplyScalar(0.9);
+                        p.mesh.scale.multiplyScalar(1.02); 
+                        p.life -= this.config.fdeb.decay;
+
+                        // GRADIENT: Yellow -> Red -> Lighter Grey Smoke
+                        if (p.life > 0.7) {
+                            // Yellow to Red
+                            let t = (1.0 - p.life) / 0.3; // 0 to 1
+                            p.mesh.material.color.setRGB(1, 1.0 - t * 0.5, 0); // Yellow (1,1,0) -> Orange/Red (1, 0.5, 0)
+                        } else if (p.life > 0.4) {
+                            // Red to Grey (Smoke)
+                            let t = (0.7 - p.life) / 0.3; // 0 to 1
+                            // Target Color: 0.5, 0.5, 0.5 (Grey)
+                            // Start Color: 1.0, 0.5, 0.0 (Red/Orange)
+                            p.mesh.material.color.setRGB(
+                                1.0 - t * 0.5,  // R: 1.0 -> 0.5
+                                0.5,            // G: 0.5 -> 0.5
+                                t * 0.5         // B: 0.0 -> 0.5
+                            );
+                        } else {
+                            // Grey Smoke Fade
+                            p.mesh.material.color.setRGB(0.5, 0.5, 0.5);
+                        }
+                        
+                        // Fade out opacity smoother
+                        p.mesh.material.opacity = Math.min(1, p.life * 2); 
+                    }
                     else if (p.type === 'ring') {
                         p.velocity.x *= 0.93; p.velocity.z *= 0.93;
                         p.velocity.y += this.config.ring.lift * 0.05;
@@ -455,7 +546,7 @@
         });
 
         // Toggle Listeners
-        const keys = ['fragA', 'fragB', 'smoke', 'fierySmoke', 'burst', 'ring', 'smokeRing'];
+        const keys = ['fragA', 'fragB', 'smoke', 'fierySmoke', 'burst', 'ring', 'smokeRing', 'fdeb'];
         keys.forEach(k => {
             document.getElementById('en-' + k).addEventListener('change', e => {
                 ExplosionSystem.config[k].enabled = e.target.checked;
@@ -498,6 +589,10 @@
         
         bind('sr-count', 'smokeRing', 'count'); bind('sr-speed', 'smokeRing', 'speed');
         bind('sr-size', 'smokeRing', 'size'); bind('sr-lift', 'smokeRing', 'lift'); bind('sr-decay', 'smokeRing', 'decay');
+
+        bind('fd-count', 'fdeb', 'count'); bind('fd-speed', 'fdeb', 'speed');
+        bind('fd-grav', 'fdeb', 'grav'); bind('fd-size', 'fdeb', 'size'); bind('fd-decay', 'fdeb', 'decay');
+        bind('fd-radius', 'fdeb', 'radius'); bind('fd-spread', 'fdeb', 'spread');
 
         window.addEventListener('keydown', e => { if (e.code === 'Space') ExplosionSystem.trigger(new THREE.Vector3(0, 0.5, 0)); });
 

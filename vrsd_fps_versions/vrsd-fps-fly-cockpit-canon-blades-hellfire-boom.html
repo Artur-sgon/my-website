@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AH-64 Apache Simulator - 3D Explosion Fixed</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
+        
+        #info {
+            position: absolute; top: 20px; right: 20px; width: auto; min-width: 350px; 
+            text-align: right; color: white; background-color: rgba(0, 0, 0, 0.8); 
+            padding: 15px; z-index: 99; border: 2px solid #555; font-size: 1.1rem;
+        }
+        #info.collapsed #info-text, #info.collapsed #speed-gauge, #info.collapsed #mode-toggle, #info.collapsed .settings-row { display: none; }
+        #info.collapsed { min-width: 100px; padding: 10px; }
+        
+        .btn-container { margin-top: 10px; display: flex; gap: 10px; justify-content: flex-end; }
+        .settings-row { margin-top: 5px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+        
+        button {
+            background: #444; color: #fff; border: 1px solid #777;
+            font-family: 'VT323', monospace; cursor: pointer; padding: 5px 15px; font-size: 1rem;
+        }
+        button:hover { background: #666; }
+        #mode-toggle { background: #2a5a2a; border-color: #4a8a4a; }
+        #mode-toggle.flying { background: #5a2a2a; border-color: #8a4a4a; }
+        
+        input[type=range] { cursor: pointer; background: #444; }
+
+        #speed-gauge { color: #00ff00; font-weight: bold; margin-top: 5px; display: none; }
+        #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; background-color: rgba(0, 0, 0, 0.7); padding: 20px;
+            border-radius: 10px; font-size: 1.5rem; z-index: 100;
+        }
+
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px; height: 40px;
+            pointer-events: none; 
+            display: none; 
+            z-index: 50;
+        }
+        .ch-part { position: absolute; background: rgba(255, 255, 255, 0.9); box-shadow: 0 0 2px black; }
+        .ch-top { width: 2px; height: 12px; top: 0; left: 19px; }
+        .ch-bottom { width: 2px; height: 12px; bottom: 0; left: 19px; }
+        .ch-left { width: 12px; height: 2px; left: 0; top: 19px; }
+        .ch-right { width: 12px; height: 2px; right: 0; top: 19px; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="crosshair">
+        <div class="ch-part ch-top"></div>
+        <div class="ch-part ch-bottom"></div>
+        <div class="ch-part ch-left"></div>
+        <div class="ch-part ch-right"></div>
+    </div>
+
+    <div id="info">
+        <div id="info-text">
+            <span id="control-hint">WASD: Move | Mouse: Look | SPACE: Jump | R: Run</span><br>
+            <b>Click screen to start.</b> ESC to unlock.
+        </div>
+        <div id="speed-gauge">PWR: 0% | SPD: 0 | YAW: 0 | [FREE LOOK OFF]</div>
+        
+        <div class="settings-row">
+            <label for="bright-slider">BRIGHTNESS: </label>
+            <input type="range" id="bright-slider" min="0" max="2" step="0.1" value="1">
+        </div>
+        <div class="settings-row">
+            <label>SHADOWS: </label>
+            <input type="checkbox" id="shadow-toggle" checked>
+        </div>
+        <div class="settings-row">
+            <label>SWAP A/D & MOUSE: </label>
+            <input type="checkbox" id="control-swap" checked>
+        </div>
+
+        <div class="btn-container">
+            <button id="mode-toggle">Switch to Flight Mode</button>
+            <button id="info-toggle">Close Controls</button>
+        </div>
+    </div>
+    <div id="loading">Loading Systems...</div>
+
+    <!-- Added SkeletonUtils for proper GLB Cloning -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/utils/SkeletonUtils.js"></script>
+
+    <script>
+        const player = {
+            mode: 'walk', height: 1.8, velocity: new THREE.Vector3(), euler: new THREE.Euler(0, 0, 0, 'YXZ'),
+            walkSpeed: 0.15, runSpeed: 0.3, isRunning: false,
+            jumpForce: 0.12, jumpCount: 0, maxJumps: 2, isGrounded: false,
+            flyPitch: 0, flyRoll: 0, lookPitch: 0, lookYaw: 0,
+            forwardThrottle: 0, targetThrottle: 0,
+            yawVelocity: 0, verticalVelocity: 0,
+            cockpitOffset: new THREE.Vector3(0, 0, 0), 
+            keys: { forward: false, backward: false, left: false, right: false, jump: false, shift: false },
+            lockControls: false,
+            swapControls: true 
+        };
+
+        const weapon = {
+            isFiring: false,
+            lastFired: 0,
+            fireRate: 120, 
+            speed: 4.0,   
+            spread: 0.04, 
+            bullets: [], 
+            explosions: [], 
+            smokeParticles: [],
+            template: null,
+            burstTexture: null,
+            smokeTexture: null 
+        };
+
+        // Missile System
+        const missile = {
+            active: [],
+            template: null,
+            trailTexture: null,
+            explosionTemplate: null, 
+            explosionClip: null,     
+            lastFired: 0,
+            fireRate: 1500, 
+            speed: 2.0, 
+            wingSide: 1 
+        };
+
+        const mixers = []; 
+        const clock = new THREE.Clock(); 
+
+        const infoBar = document.getElementById('info');
+        const infoToggle = document.getElementById('info-toggle');
+        const modeBtn = document.getElementById('mode-toggle');
+        const brightSlider = document.getElementById('bright-slider');
+        const shadowToggle = document.getElementById('shadow-toggle');
+        const swapControlToggle = document.getElementById('control-swap');
+        const crosshair = document.getElementById('crosshair');
+
+        infoToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            infoBar.classList.toggle('collapsed');
+            infoToggle.textContent = infoBar.classList.contains('collapsed') ? 'Show' : 'Close Controls';
+        });
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
+        
+        // --- AUDIO SYSTEM ---
+        const listener = new THREE.AudioListener();
+        camera.add(listener);
+
+        const soundRotor = new THREE.Audio(listener);
+        const soundCannon = new THREE.Audio(listener);
+        const audioLoader = new THREE.AudioLoader();
+
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', function(buffer) {
+            soundRotor.setBuffer(buffer);
+            soundRotor.setLoop(true);
+            soundRotor.setVolume(0.2); 
+        });
+
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', function(buffer) {
+            soundCannon.setBuffer(buffer);
+            soundCannon.setLoop(true);
+            soundCannon.setVolume(0.4);
+        });
+
+        const renderer = new THREE.WebGLRenderer({ 
+            canvas: document.getElementById('canvas'), 
+            antialias: true,
+            powerPreference: "high-performance" 
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const ambientLight = new THREE.AmbientLight(0xffde77, 0.2); 
+        scene.add(ambientLight);
+        
+        const sun = new THREE.DirectionalLight(0xffff86, 0.7); 
+        sun.position.set(70, 70, -20);
+        sun.castShadow = true;
+        sun.shadow.mapSize.width = 4096;
+        sun.shadow.mapSize.height = 4096;
+        sun.shadow.bias = -0.001;
+        scene.add(sun);
+
+        const hemisphereLight = new THREE.HemisphereLight(0xffff88, 0x080820, 0.2); 
+        scene.add(hemisphereLight);
+
+        brightSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            ambientLight.intensity = 0.2 * val;
+            sun.intensity = 0.7 * val;
+            hemisphereLight.intensity = 0.2 * val;
+        });
+        brightSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+        
+        shadowToggle.addEventListener('change', (e) => { sun.castShadow = e.target.checked; });
+        shadowToggle.addEventListener('click', (e) => e.stopPropagation());
+
+        swapControlToggle.addEventListener('change', (e) => {
+            player.swapControls = e.target.checked;
+            player.yawVelocity = 0;
+            player.flyRoll = 0;
+            updateControlHint();
+        });
+        swapControlToggle.addEventListener('click', (e) => e.stopPropagation());
+
+        let cockpit = null;
+        let blades = null;
+        let bladeAngle = 0;
+        let collisionObjects = [];
+        const loader = new THREE.GLTFLoader();
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+        
+        const textureLoader = new THREE.TextureLoader();
+        
+        textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png', (t) => {
+            weapon.burstTexture = t;
+            t.repeat.set(1/7, 1);
+        });
+
+        textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/smoke_a.png', (t) => {
+            weapon.smokeTexture = t;
+        });
+
+        textureLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/smoke_b.png', (t) => {
+            missile.trailTexture = t;
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+            gltf.scene.traverse(c => { 
+                if(c.isMesh) { 
+                    c.material.side = THREE.DoubleSide; 
+                    c.castShadow = true;
+                    c.receiveShadow = true;
+                    collisionObjects.push(c); 
+                } 
+            });
+            scene.add(gltf.scene);
+            document.getElementById('loading').style.display = 'none';
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
+            cockpit = gltf.scene;
+            cockpit.traverse(child => { 
+                if (child.isMesh) {
+                    child.material.side = THREE.DoubleSide; 
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+            cockpit.visible = false;
+            scene.add(cockpit);
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-blades.glb', (gltf) => {
+            blades = gltf.scene;
+            blades.traverse(child => { 
+                if (child.isMesh) {
+                    child.material.side = THREE.DoubleSide; 
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    child.material.transparent = true;
+                }
+            });
+            blades.visible = false;
+            scene.add(blades);
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
+            weapon.template = gltf.scene;
+            weapon.template.traverse(c => {
+                if(c.isMesh) {
+                    c.castShadow = true;
+                    c.receiveShadow = false;
+                }
+            });
+            weapon.template.scale.set(0.6, 0.6, 0.6);
+        });
+
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hellfire.glb', (gltf) => {
+            missile.template = gltf.scene;
+            missile.template.traverse(c => {
+                if(c.isMesh) {
+                    c.castShadow = true;
+                    c.receiveShadow = false;
+                }
+            });
+            missile.template.scale.set(1, 1, 1);
+        });
+
+        // Load 3D Explosion
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/explosion.glb', (gltf) => {
+            if (gltf.animations && gltf.animations.length > 0) {
+                missile.explosionTemplate = gltf.scene;
+                missile.explosionClip = gltf.animations[0]; 
+                
+                // Hide template initially
+                missile.explosionTemplate.visible = false;
+                scene.add(missile.explosionTemplate);
+
+                missile.explosionTemplate.traverse(c => {
+                    if(c.isMesh) {
+                        c.material.transparent = true;
+                        c.material.opacity = 0.9;
+                        c.frustumCulled = false; // Prevent culling issues
+                    }
+                });
+            }
+        });
+
+        new THREE.TextureLoader().load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+            t.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = t; scene.environment = t;
+        });
+
+        const raycaster = new THREE.Raycaster();
+
+        function checkCollisions(moveX, moveZ) {
+            if (collisionObjects.length === 0) return true;
+            const checkPoints = [new THREE.Vector3(0.3, 0, 0.3), new THREE.Vector3(-0.3, 0, 0.3), new THREE.Vector3(0, 0, 0)];
+            let canMove = true;
+            checkPoints.forEach(point => {
+                const origin = new THREE.Vector3().copy(camera.position).add(point);
+                if (moveZ !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(0, 0, moveZ > 0 ? 1 : -1);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+                if (moveX !== 0) {
+                    raycaster.ray.origin.copy(origin);
+                    raycaster.ray.direction.set(moveX > 0 ? 1 : -1, 0, 0);
+                    if (raycaster.intersectObjects(collisionObjects).length > 0 && raycaster.intersectObjects(collisionObjects)[0].distance < 0.5) canMove = false;
+                }
+            });
+            return canMove;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = true;
+            if (e.code === 'KeyS') player.keys.backward = true;
+            if (e.code === 'KeyA') player.keys.left = true;
+            if (e.code === 'KeyD') player.keys.right = true;
+            if (e.code === 'KeyR') player.isRunning = !player.isRunning;
+            if (e.code === 'Space') player.keys.jump = true;
+            if (e.shiftKey) player.keys.shift = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') player.keys.forward = false;
+            if (e.code === 'KeyS') player.keys.backward = false;
+            if (e.code === 'KeyA') player.keys.left = false;
+            if (e.code === 'KeyD') player.keys.right = false;
+            if (e.code === 'Space') player.keys.jump = false;
+            if (!e.shiftKey) { player.keys.shift = false; player.lookPitch = 0; player.lookYaw = 0; }
+        });
+        window.addEventListener('wheel', (e) => {
+            if (player.mode === 'fly') player.targetThrottle = Math.max(0, Math.min(1.5, player.targetThrottle - e.deltaY * 0.0005));
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (!player.lockControls || player.mode !== 'fly') return;
+
+            if (e.button === 0) {
+                weapon.isFiring = true;
+                if (soundCannon.buffer && !soundCannon.isPlaying) {
+                    soundCannon.play();
+                }
+            }
+            if (e.button === 1) {
+                e.preventDefault(); 
+                fireMissile();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            weapon.isFiring = false;
+            if (soundCannon.isPlaying) {
+                soundCannon.stop();
+            }
+        });
+
+        function updateControlHint() {
+            if (player.mode === 'walk') {
+                document.getElementById('control-hint').innerHTML = "WASD: Move | Mouse: Look | SPACE: Jump | R: Run";
+            } else {
+                if (player.swapControls) {
+                    document.getElementById('control-hint').innerHTML = "W/S: Alt | A/D: <b>Slide</b> | M-Click: <b>Missile</b> | L-Click: <b>Gun</b>";
+                } else {
+                    document.getElementById('control-hint').innerHTML = "W/S: Alt | A/D: <b>Pivot</b> | M-Click: <b>Missile</b> | L-Click: <b>Gun</b>";
+                }
+            }
+        }
+
+        modeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (listener.context.state === 'suspended') {
+                listener.context.resume();
+            }
+
+            player.mode = (player.mode === 'walk') ? 'fly' : 'walk';
+            weapon.isFiring = false;
+            const isFly = player.mode === 'fly';
+            modeBtn.textContent = isFly ? 'Switch to Walk Mode' : 'Switch to Flight Mode';
+            modeBtn.classList.toggle('flying', isFly);
+            
+            if (isFly) {
+                if (soundRotor.buffer) soundRotor.play();
+            } else {
+                if (soundRotor.isPlaying) soundRotor.stop();
+                if (soundCannon.isPlaying) soundCannon.stop(); 
+            }
+
+            document.getElementById('speed-gauge').style.display = isFly ? 'block' : 'none';
+            crosshair.style.display = isFly ? 'block' : 'none';
+            
+            if (cockpit) cockpit.visible = isFly;
+            if (blades) blades.visible = isFly; 
+            
+            updateControlHint();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!player.lockControls) return;
+            if (player.mode === 'walk') {
+                player.euler.y -= e.movementX * 0.002;
+                player.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.euler.x - e.movementY * 0.002));
+            } else {
+                if (player.keys.shift) {
+                    player.lookYaw -= e.movementX * 0.002;
+                    player.lookPitch = Math.max(-1.2, Math.min(1.2, player.lookPitch - e.movementY * 0.002));
+                } else {
+                    player.flyPitch = Math.max(-0.8, Math.min(0.8, player.flyPitch - e.movementY * 0.001));
+                    if (player.swapControls) {
+                        player.yawVelocity -= e.movementX * 0.0001; 
+                    } else {
+                        player.flyRoll = Math.max(-0.8, Math.min(0.8, player.flyRoll - e.movementX * 0.001));
+                    }
+                }
+            }
+        });
+
+        document.getElementById('canvas').addEventListener('click', () => { document.getElementById('canvas').requestPointerLock(); });
+        document.addEventListener('pointerlockchange', () => player.lockControls = document.pointerLockElement === document.getElementById('canvas'));
+
+        // --- FX: CANNON EXPLOSION (Sprite) ---
+        function createExplosion(position) {
+            if (weapon.burstTexture) {
+                const tex = weapon.burstTexture.clone();
+                tex.needsUpdate = true; 
+                const mat = new THREE.SpriteMaterial({ 
+                    map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+                    rotation: Math.random() * Math.PI * 2 
+                });
+                const sprite = new THREE.Sprite(mat);
+                sprite.position.copy(position);
+                sprite.scale.set(3, 3, 3); 
+                scene.add(sprite);
+                weapon.explosions.push({ mesh: sprite, texture: tex, currentFrame: 0, lastFrameTime: Date.now(), frameDuration: 30 });
+            }
+            createSmoke(position);
+        }
+
+        // --- FX: MISSILE EXPLOSION (3D) ---
+        function createBigExplosion(position) {
+            if (!missile.explosionTemplate || !missile.explosionClip) {
+                createExplosion(position);
+                return;
+            }
+
+            try {
+                // USE SKELETONUTILS FOR ANIMATED GLB CLONING
+                const mesh = THREE.SkeletonUtils.clone(missile.explosionTemplate);
+                mesh.position.copy(position);
+                mesh.visible = true;
+                mesh.scale.set(8, 8, 8); // Scale up for big boom
+                scene.add(mesh);
+
+                const mixer = new THREE.AnimationMixer(mesh);
+                const action = mixer.clipAction(missile.explosionClip);
+                action.setLoop(THREE.LoopOnce);
+                action.clampWhenFinished = true;
+                action.play();
+
+                mixer.addEventListener('finished', () => {
+                    scene.remove(mesh);
+                    const index = mixers.findIndex(m => m.mixer === mixer);
+                    if (index !== -1) mixers.splice(index, 1);
+                });
+
+                mixers.push({ mixer: mixer, mesh: mesh });
+            } catch(e) {
+                console.error("Explosion Error", e);
+                createExplosion(position);
+            }
+        }
+
+        // --- FX: GUN SMOKE ---
+        function createSmoke(position) {
+            if (!weapon.smokeTexture) return;
+            for (let i = 0; i < 12; i++) {
+                const mat = new THREE.SpriteMaterial({ 
+                    map: weapon.smokeTexture, transparent: true, opacity: 1, depthWrite: false,
+                    rotation: Math.random() * Math.PI * 2 
+                });
+                const sprite = new THREE.Sprite(mat);
+                const offsetX = (Math.random() - 0.5) * 1.5;
+                const offsetZ = (Math.random() - 0.5) * 1.5;
+                const offsetY = Math.random() * 0.5;
+                sprite.position.set(position.x + offsetX, position.y + offsetY, position.z + offsetZ);
+                const scale = 0.5 + Math.random() * 1.5;
+                sprite.scale.set(scale, scale, scale);
+                scene.add(sprite);
+                const velocity = new THREE.Vector3((Math.random() - 0.5) * 0.05, 0.05 + Math.random() * 0.08, (Math.random() - 0.5) * 0.05);
+                weapon.smokeParticles.push({ mesh: sprite, velocity: velocity, life: 0.4, decay: 0.01 + Math.random() * 0.01 });
+            }
+        }
+
+        function fireMissile() {
+            const now = Date.now();
+            if (!missile.template || (now - missile.lastFired < missile.fireRate)) return;
+
+            const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+            const spawnOffset = new THREE.Vector3(2.5 * missile.wingSide, -1.5, 1.0);
+            spawnOffset.applyQuaternion(heliQ);
+            const spawnPos = camera.position.clone().add(spawnOffset);
+
+            const mMesh = missile.template.clone();
+            mMesh.position.copy(spawnPos);
+            
+            const targetDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+            mMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), targetDir);
+
+            const velocity = targetDir.multiplyScalar(missile.speed);
+
+            scene.add(mMesh);
+            missile.active.push({ mesh: mMesh, velocity: velocity, life: 300 }); 
+            
+            missile.lastFired = now;
+            missile.wingSide *= -1; 
+        }
+
+        function createMissileTrail(position) {
+            if (!missile.trailTexture) return;
+            const mat = new THREE.SpriteMaterial({ 
+                map: missile.trailTexture, transparent: true, opacity: 0.6, depthWrite: false,
+                rotation: Math.random() * Math.PI * 2 
+            });
+            const sprite = new THREE.Sprite(mat);
+            sprite.position.copy(position);
+            sprite.position.x += (Math.random() - 0.5) * 0.2;
+            sprite.position.y += (Math.random() - 0.5) * 0.2;
+            sprite.position.z += (Math.random() - 0.5) * 0.2;
+            sprite.scale.set(1.5, 1.5, 1.5);
+            scene.add(sprite);
+            const velocity = new THREE.Vector3((Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.02);
+            weapon.smokeParticles.push({ mesh: sprite, velocity: velocity, life: 0.5, decay: 0.02 });
+        }
+
+        function update() {
+            const now = Date.now();
+            const delta = clock.getDelta(); 
+
+            if (player.mode === 'walk') {
+                raycaster.set(camera.position, new THREE.Vector3(0,-1,0));
+                const inter = raycaster.intersectObjects(collisionObjects);
+                player.isGrounded = inter.length > 0 && inter[0].distance < player.height + 0.3;
+
+                if (!player.isGrounded) {
+                    player.velocity.y -= 0.005;
+                } else {
+                    if (player.velocity.y <= 0) {
+                        player.velocity.y = 0;
+                        player.jumpCount = 0;
+                        camera.position.y = inter[0].point.y + player.height;
+                    }
+                }
+
+                if (player.keys.jump && (player.isGrounded || player.jumpCount < player.maxJumps)) {
+                    player.velocity.y = player.jumpForce;
+                    player.jumpCount++;
+                    player.keys.jump = false; 
+                }
+
+                const speed = player.isRunning ? player.runSpeed : player.walkSpeed;
+                const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion); dir.y = 0; dir.normalize();
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir);
+
+                if (checkCollisions((player.keys.left ? speed : 0) + (player.keys.right ? -speed : 0), (player.keys.forward ? speed : 0) + (player.keys.backward ? -speed : 0))) {
+                    if(player.keys.forward) camera.position.addScaledVector(dir, speed);
+                    if(player.keys.backward) camera.position.addScaledVector(dir, -speed);
+                    if(player.keys.left) camera.position.addScaledVector(side, speed);
+                    if(player.keys.right) camera.position.addScaledVector(side, -speed);
+                }
+
+                camera.position.y += player.velocity.y;
+                camera.quaternion.setFromEuler(player.euler);
+
+            } else {
+                player.forwardThrottle += (player.targetThrottle - player.forwardThrottle) * 0.005;
+                if (player.keys.forward) player.verticalVelocity += 0.006;
+                else if (player.keys.backward) player.verticalVelocity -= 0.006;
+                player.verticalVelocity *= 0.96; camera.position.y += player.verticalVelocity;
+                
+                if (player.swapControls) {
+                    if (player.keys.left) player.flyRoll = Math.min(player.flyRoll + 0.02, 0.5);
+                    else if (player.keys.right) player.flyRoll = Math.max(player.flyRoll - 0.02, -0.5);
+                    else player.flyRoll *= 0.92; 
+                    player.euler.y += player.yawVelocity;
+                    player.yawVelocity *= 0.96;
+                } else {
+                    if (player.keys.left) player.yawVelocity += 0.0015;
+                    else if (player.keys.right) player.yawVelocity -= 0.0015;
+                    player.yawVelocity *= 0.94; 
+                    player.euler.y += player.yawVelocity;
+                }
+
+                const curYaw = new THREE.Euler(0, player.euler.y, 0);
+                const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                const sid = new THREE.Vector3(1,0,0).applyQuaternion(new THREE.Quaternion().setFromEuler(curYaw));
+                
+                camera.position.addScaledVector(fwd, player.forwardThrottle + (-player.flyPitch * 0.25));
+                camera.position.addScaledVector(sid, -player.flyRoll * 0.25);
+
+                const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+                const headQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.lookPitch, player.lookYaw, 0, 'YXZ'));
+                
+                camera.quaternion.multiplyQuaternions(heliQ, headQ);
+
+                if (cockpit) {
+                    cockpit.quaternion.copy(heliQ);
+                    const offset = player.cockpitOffset.clone().applyQuaternion(heliQ);
+                    cockpit.position.copy(camera.position).add(offset);
+                }
+
+                if (blades) {
+                    bladeAngle += 0.35; 
+                    const bladeTilt = -0.1; 
+                    const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), bladeTilt);
+                    const bladeOffset = new THREE.Vector3(0, 2, 1.5); 
+                    bladeOffset.applyQuaternion(heliQ); 
+                    blades.position.copy(camera.position).add(bladeOffset);
+                    const spinQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bladeAngle);
+                    blades.quaternion.copy(heliQ).multiply(tiltQ).multiply(spinQ);
+                    blades.traverse(child => { 
+                     if(child.isMesh) { 
+                        child.material.opacity = 0.5; // Static
+                     }
+                    });
+                }
+
+                // --- MISSILE UPDATE ---
+                for (let i = missile.active.length - 1; i >= 0; i--) {
+                    const m = missile.active[i];
+                    
+                    const dist = m.velocity.length();
+                    raycaster.set(m.mesh.position, m.velocity.clone().normalize());
+                    const hits = raycaster.intersectObjects(collisionObjects);
+                    
+                    if (hits.length > 0 && hits[0].distance <= dist) {
+                        createBigExplosion(hits[0].point); // 3D Explosion
+                        scene.remove(m.mesh);
+                        missile.active.splice(i, 1);
+                        continue;
+                    }
+
+                    m.mesh.position.add(m.velocity);
+                    createMissileTrail(m.mesh.position.clone());
+
+                    m.life--;
+                    if (m.life <= 0) {
+                        scene.remove(m.mesh);
+                        missile.active.splice(i, 1);
+                    }
+                }
+
+                // --- 3D EXPLOSION MIXER UPDATE ---
+                for (let i = mixers.length - 1; i >= 0; i--) {
+                    const obj = mixers[i];
+                    if (obj.mixer) {
+                        try {
+                            obj.mixer.update(delta);
+                        } catch(e) {
+                            scene.remove(obj.mesh);
+                            mixers.splice(i, 1);
+                        }
+                    }
+                }
+
+                // --- CANNON UPDATE ---
+                if (weapon.isFiring && weapon.template && (now - weapon.lastFired > weapon.fireRate)) {
+                    const spawnOffset = new THREE.Vector3(0, -2, -3);
+                    spawnOffset.applyQuaternion(heliQ); 
+                    const spawnPos = camera.position.clone().add(spawnOffset);
+                    const bulletMesh = weapon.template.clone();
+                    bulletMesh.position.copy(spawnPos);
+                    const spreadX = (Math.random() - 0.5) * weapon.spread;
+                    const spreadY = (Math.random() - 0.5) * weapon.spread;
+                    const localDir = new THREE.Vector3(spreadX, spreadY, -1).normalize();
+                    const velocity = localDir.applyQuaternion(camera.quaternion).multiplyScalar(weapon.speed);
+                    bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,-1), velocity.clone().normalize());
+                    bulletMesh.rotateZ(Math.random() * Math.PI * 2);
+                    scene.add(bulletMesh);
+                    weapon.bullets.push({ mesh: bulletMesh, velocity: velocity, life: 100 });
+                    weapon.lastFired = now;
+                }
+
+                for (let i = weapon.bullets.length - 1; i >= 0; i--) {
+                    const b = weapon.bullets[i];
+                    const direction = b.velocity.clone().normalize();
+                    const distance = b.velocity.length(); 
+                    raycaster.set(b.mesh.position, direction);
+                    const hits = raycaster.intersectObjects(collisionObjects);
+                    if (hits.length > 0 && hits[0].distance <= distance) {
+                        createExplosion(hits[0].point);
+                        scene.remove(b.mesh);
+                        weapon.bullets.splice(i, 1);
+                        continue; 
+                    }
+                    b.mesh.position.add(b.velocity); 
+                    b.life--; 
+                    if (b.life <= 0) {
+                        scene.remove(b.mesh);
+                        weapon.bullets.splice(i, 1);
+                    }
+                }
+
+                // Sprite FX Updates
+                for (let i = weapon.explosions.length - 1; i >= 0; i--) {
+                    const exp = weapon.explosions[i];
+                    if (now - exp.lastFrameTime > exp.frameDuration) {
+                        exp.currentFrame++;
+                        exp.lastFrameTime = now;
+                        if (exp.currentFrame > 6) {
+                            scene.remove(exp.mesh);
+                            exp.mesh.material.dispose(); 
+                            exp.texture.dispose();
+                            weapon.explosions.splice(i, 1);
+                        } else {
+                            exp.texture.offset.x = exp.currentFrame / 7;
+                        }
+                    }
+                }
+
+                for (let i = weapon.smokeParticles.length - 1; i >= 0; i--) {
+                    const s = weapon.smokeParticles[i];
+                    s.mesh.position.add(s.velocity);
+                    s.velocity.x *= 0.98;
+                    s.velocity.z *= 0.98;
+                    s.life -= s.decay;
+                    s.mesh.material.opacity = s.life;
+                    s.mesh.scale.multiplyScalar(1.03); 
+                    
+                    if (s.life <= 0) {
+                        scene.remove(s.mesh);
+                        s.mesh.material.dispose();
+                        weapon.smokeParticles.splice(i, 1);
+                    }
+                }
+                
+                document.getElementById('speed-gauge').textContent = `PWR: ${(player.targetThrottle*100).toFixed(0)}% | SPD: ${(player.forwardThrottle*100).toFixed(0)} | V-LIFT: ${(player.verticalVelocity*400).toFixed(0)} | ${player.keys.shift ? '[LOOK]' : '[FLY]'}`;
+            }
+        }
+
+        function animate() { requestAnimationFrame(animate); update(); renderer.render(scene, camera); }
+        camera.position.set(155, 6, 8);
+        animate();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

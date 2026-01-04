@@ -486,7 +486,7 @@
         };
 
 
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/terrain.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/terrain_a.glb', (gltf) => {
             gltf.scene.traverse(c => { 
                 if(c.isMesh) { 
                     c.material.side = THREE.DoubleSide; 

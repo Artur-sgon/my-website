@@ -486,7 +486,7 @@
         };
 
 
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_terrain.glb', (gltf) => {
             gltf.scene.traverse(c => { 
                 if(c.isMesh) { 
                     c.material.side = THREE.DoubleSide; 
@@ -725,39 +725,51 @@
             }
         }
 
-        // --- NEW: MISSILE LOGIC ---
+       
+        // --- NEW: MISSILE LOGIC (With 0.5s Launch Delay) ---
         function fireMissile() {
             const now = Date.now();
+            // Check rate limit immediately to prevent trigger spam
             if (!missile.template || (now - missile.lastFired < missile.fireRate)) return;
-
-            // Rotation of the helicopter body
-            const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
             
-            // Calculate spawn position: Wings are roughly 2.5m left/right, 1.5m down, 1.0m back
-            const spawnOffset = new THREE.Vector3(2.5 * missile.wingSide, -1.5, 1.0);
-            spawnOffset.applyQuaternion(heliQ);
-            const spawnPos = camera.position.clone().add(spawnOffset);
-
-            const mMesh = missile.template.clone();
-            mMesh.position.copy(spawnPos);
-            
-            // Aiming: For simplicity, aim towards where the camera is looking
-            const targetDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-            
-            // Orient missile mesh
-            mMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), targetDir);
-
-            // Velocity vector
-            const velocity = targetDir.multiplyScalar(missile.speed);
-
-            scene.add(mMesh);
-            missile.active.push({ mesh: mMesh, velocity: velocity, life: 300 }); // 300 frames life
-            
-            // Play Launch Sound Immediately
-            playSound(bufferLaunch, 0.5);
-
+            // Mark the time of the trigger pull
             missile.lastFired = now;
-            missile.wingSide *= -1; // Switch wings
+
+            // Optional: You could play a "cockpit click" sound here if you had one.
+            
+            // Wait 500ms before the missile actually appears and flies
+            setTimeout(() => {
+                // We calculate position/rotation INSIDE the timeout 
+                // so the missile spawns where the heli is AFTER the delay.
+                
+                // Rotation of the helicopter body
+                const heliQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(player.flyPitch, player.euler.y, player.flyRoll, 'YXZ'));
+                
+                // Calculate spawn position: Wings are roughly 2.5m left/right, 1.5m down, 1.0m back
+                const spawnOffset = new THREE.Vector3(2.5 * missile.wingSide, -1.5, 1.0);
+                spawnOffset.applyQuaternion(heliQ);
+                const spawnPos = camera.position.clone().add(spawnOffset);
+
+                const mMesh = missile.template.clone();
+                mMesh.position.copy(spawnPos);
+                
+                // Aiming: Aim towards where the camera is looking at the moment of exit
+                const targetDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+                
+                // Orient missile mesh
+                mMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), targetDir);
+
+                // Velocity vector
+                const velocity = targetDir.multiplyScalar(missile.speed);
+
+                scene.add(mMesh);
+                missile.active.push({ mesh: mMesh, velocity: velocity, life: 300 }); 
+                
+                // Play Launch Sound
+                playSound(bufferLaunch, 0.5);
+
+                missile.wingSide *= -1; // Switch wings for the next shot
+            }, 300); 
         }
 
         function createMissileTrail(position) {

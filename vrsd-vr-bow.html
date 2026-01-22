@@ -1,11 +1,9 @@
---- START OF FILE vrsd-vr-bow.html ---
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>3D VR Environment - Santos Dumont</title>
+    <title>3D VR Archery - Santos Dumont</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -14,20 +12,16 @@
             background: #000; color: white; display: flex; flex-direction: column;
             justify-content: center; align-items: center; z-index: 1000;
         }
-        
-        /* Container for Button and Version Text */
         #ui-container {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             display: none; flex-direction: column; align-items: center; z-index: 2000;
         }
-
         #manual-vr-start {
             padding: 30px 60px; font-size: 2.5rem; font-family: 'VT323', monospace;
             background: #2ecc71; color: white; border: 5px solid #fff; border-radius: 15px;
             cursor: pointer; box-shadow: 0 0 40px rgba(46, 204, 113, 0.8);
             text-transform: uppercase;
         }
-
         #version-info {
             color: #ffffff;
             margin-top: 15px;
@@ -44,7 +38,7 @@
 
     <div id="ui-container">
         <button id="manual-vr-start">Start VR Experience</button>
-        <div id="version-info">bow and arrow added</div>
+        <div id="version-info">shooting mechanics added</div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
@@ -66,22 +60,35 @@
         renderer.outputEncoding = THREE.sRGBEncoding; 
         document.body.appendChild(renderer.domElement);
 
-        // --- VR CONTROLLERS ---
-        const controllerGripLeft = renderer.xr.getControllerGrip(0);
-        const controllerGripRight = renderer.xr.getControllerGrip(1);
-        playerGroup.add(controllerGripLeft);
-        playerGroup.add(controllerGripRight);
+        const gripLeft = renderer.xr.getControllerGrip(0);
+        const gripRight = renderer.xr.getControllerGrip(1);
+        playerGroup.add(gripLeft, gripRight);
+
+        // --- GAME STATE ---
+        let bowModel, bowMixer, bowAction;
+        let handArrow, masterArrowModel;
+        let activeArrows = [];
+        let isSnapped = false;
+        let isDrawing = false;
+        let pullAmount = 0;
+        let canSpawnArrow = true;
+        let triggerPressed = false;
+
+        const ARCHERY_CONFIG = {
+            snapDistance: 0.15,
+            maxPull: 0.7,
+            arrowSpeedMult: 45
+        };
 
         const vrButton = document.getElementById('manual-vr-start');
         const uiContainer = document.getElementById('ui-container');
 
         vrButton.addEventListener('click', () => {
             if (navigator.xr) {
-                const sessionInit = { optionalFeatures: ['local-floor', 'bounded-floor'] };
-                navigator.xr.requestSession('immersive-vr', sessionInit).then(async (session) => {
+                navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] }).then(async (session) => {
                     await renderer.xr.setSession(session);
                     renderer.xr.setReferenceSpaceType('local-floor');
-                    uiContainer.style.display = 'none'; // Hide whole UI
+                    uiContainer.style.display = 'none';
                 });
             }
         });
@@ -96,28 +103,8 @@
         manager.onProgress = (url, l, t) => statusText.innerText = `Loading Assets: ${Math.round((l/t)*100)}%`;
         manager.onLoad = () => {
             document.getElementById('loading').style.display = 'none';
-            uiContainer.style.display = 'flex'; // Show UI
+            uiContainer.style.display = 'flex';
         };
-
-        const texLoader = new THREE.TextureLoader(manager);
-        texLoader.setCrossOrigin('anonymous');
-        texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
-            tex.mapping = THREE.EquirectangularReflectionMapping;
-            tex.encoding = THREE.sRGBEncoding;
-            scene.background = tex;
-            scene.environment = tex;
-        });
-
-        const player = { 
-            height: 1.3, walkSpeed: 0.12, runSpeed: 0.25,
-            isRunning: false, velocity: 0, gravity: -0.012, 
-            jumpForce: 0.4, jumpCount: 0, maxJumps: 2,
-            isGrounded: false, stick: {x:0, y:0},
-            aButtonLatch: false, bButtonLatch: false
-        };
-
-        const raycaster = new THREE.Raycaster();
-        let collisionObjects = [];
 
         const loader = new THREE.GLTFLoader(manager);
         const draco = new THREE.DRACOLoader();
@@ -125,77 +112,220 @@
         loader.setDRACOLoader(draco);
         
         // Environment
+        let collisionObjects = [];
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1_apache.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });
 
-        // --- BOW (Left Hand) ---
+        // Bow with Animation
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/bow.glb', (gltf) => {
-            const bow = gltf.scene;
-            bow.rotation.x = Math.PI / 2; 
-            bow.rotation.y = Math.PI; 
-            bow.rotation.z = 0; 
-            controllerGripLeft.add(bow);
+            bowModel = gltf.scene;
+            bowModel.rotation.set(Math.PI/2, Math.PI, 0);
+            gripLeft.add(bowModel);
+
+            // Setup Animation
+            if (gltf.animations && gltf.animations.length > 0) {
+                bowMixer = new THREE.AnimationMixer(bowModel);
+                bowAction = bowMixer.clipAction(gltf.animations[0]);
+                bowAction.play();
+                bowAction.paused = true; // We will scrub this manually
+            }
         });
 
-        // --- ARROW (Right Hand) ---
+        // Arrow Model
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
-            const arrow = gltf.scene;
-            arrow.rotation.x = Math.PI / 2;
-            arrow.rotation.y = Math.PI;
-            controllerGripRight.add(arrow);
+            masterArrowModel = gltf.scene;
+            spawnNewHandArrow();
         });
 
-        // --- VR RENDER LOOP ---
+        function spawnNewHandArrow() {
+            if (handArrow) gripRight.remove(handArrow);
+            handArrow = masterArrowModel.clone();
+            handArrow.rotation.set(Math.PI/2, Math.PI, 0);
+            gripRight.add(handArrow);
+            canSpawnArrow = true;
+            handArrow.visible = true;
+        }
+
+        const player = { height: 1.3, walkSpeed: 0.12, velocity: 0, gravity: -0.012, stick: {x:0, y:0} };
+        const raycaster = new THREE.Raycaster();
+
+        // --- PHYSICS & LOGIC LOOP ---
+        const clock = new THREE.Clock();
+
         renderer.setAnimationLoop(() => {
+            const delta = clock.getDelta();
             const session = renderer.xr.getSession();
+
             if (session) {
                 for (const source of session.inputSources) {
-                    if (source.gamepad) {
-                        const axes = source.gamepad.axes;
-                        const buttons = source.gamepad.buttons;
+                    if (!source.gamepad) continue;
+                    const axes = source.gamepad.axes;
+                    const btns = source.gamepad.buttons;
 
-                        if (source.handedness === 'left') {
-                            player.stick.x = axes[2] || axes[0];
-                            player.stick.y = axes[3] || axes[1];
+                    if (source.handedness === 'left') {
+                        player.stick.x = axes[2] || axes[0];
+                        player.stick.y = axes[3] || axes[1];
+                    }
+                    if (source.handedness === 'right') {
+                        // Trigger (index 0)
+                        const trigger = btns[0].pressed;
+                        
+                        // Handle Shooting
+                        if (trigger && !triggerPressed) {
+                            triggerPressed = true;
+                        } else if (!trigger && triggerPressed) {
+                            if (isDrawing) releaseArrow();
+                            triggerPressed = false;
                         }
-                        if (source.handedness === 'right') {
-                            const turnAxis = axes[2] || axes[0];
-                            if (Math.abs(turnAxis) > 0.7) {
-                                playerGroup.rotation.y -= turnAxis * 0.05;
-                            }
-                            const aPressed = buttons[4] && buttons[4].pressed;
-                            if (aPressed && !player.aButtonLatch) {
-                                if (player.isGrounded || player.jumpCount < player.maxJumps) {
-                                    player.velocity = player.jumpForce;
-                                    player.jumpCount++;
-                                    player.isGrounded = false;
-                                }
-                                player.aButtonLatch = true;
-                            } else if (!aPressed) {
-                                player.aButtonLatch = false;
-                            }
-                            const bPressed = buttons[5] && buttons[5].pressed;
-                            if (bPressed && !player.bButtonLatch) {
-                                player.isRunning = !player.isRunning;
-                                player.bButtonLatch = true;
-                            } else if (!bPressed) {
-                                player.bButtonLatch = false;
-                            }
-                        }
+
+                        // Turning
+                        const turn = axes[2] || axes[0];
+                        if (Math.abs(turn) > 0.7) playerGroup.rotation.y -= turn * 0.05;
                     }
                 }
             }
 
+            updateArcheryLogic();
+            updateProjectiles(delta);
+            updatePlayerPhysics();
+
+            renderer.render(scene, camera);
+        });
+
+        function updateArcheryLogic() {
+            if (!bowModel || !handArrow || !canSpawnArrow) return;
+
+            const bowPos = new THREE.Vector3();
+            const arrowPos = new THREE.Vector3();
+            gripLeft.getWorldPosition(bowPos);
+            gripRight.getWorldPosition(arrowPos);
+
+            const dist = bowPos.distanceTo(arrowPos);
+
+            // 1. Snap Logic
+            if (dist < ARCHERY_CONFIG.snapDistance && !isDrawing) {
+                isSnapped = true;
+            } else if (!isDrawing) {
+                isSnapped = false;
+            }
+
+            if (isSnapped) {
+                // Align arrow rotation to bow
+                handArrow.quaternion.copy(new THREE.Quaternion()); // Reset local
+                const bowWorldQuat = new THREE.Quaternion();
+                gripLeft.getWorldQuaternion(bowWorldQuat);
+                
+                // Snap rotation: arrow matches bow's world orientation
+                scene.attach(handArrow);
+                handArrow.quaternion.copy(bowWorldQuat);
+                handArrow.rotateX(Math.PI/2);
+                handArrow.rotateY(Math.PI);
+
+                // 2. Pull Logic
+                if (triggerPressed) {
+                    isDrawing = true;
+                    
+                    // Calculate pull along bow's forward vector (Z)
+                    const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
+                    const bowForward = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix);
+                    
+                    const pullVec = new THREE.Vector3().subVectors(arrowPos, bowPos);
+                    const rawPull = -pullVec.dot(bowForward); // Pulling away from forward
+                    
+                    pullAmount = Math.max(0, Math.min(rawPull, ARCHERY_CONFIG.maxPull));
+
+                    // Scrub Animation
+                    if (bowAction) {
+                        const duration = bowAction.getClip().duration;
+                        bowAction.time = (pullAmount / ARCHERY_CONFIG.maxPull) * duration;
+                        bowMixer.update(0); // Force update
+                    }
+
+                    // Position arrow on the string
+                    const offset = bowForward.clone().multiplyScalar(-pullAmount);
+                    handArrow.position.copy(bowPos).add(offset);
+
+                } else {
+                    // Just snapped, not pulling: keep at bow origin
+                    isDrawing = false;
+                    handArrow.position.copy(bowPos);
+                    if (bowAction) {
+                        bowAction.time = 0;
+                        bowMixer.update(0);
+                    }
+                }
+            } else {
+                // Not snapped: Follow right hand normally
+                gripRight.attach(handArrow);
+                handArrow.position.set(0,0,0);
+                handArrow.rotation.set(Math.PI/2, Math.PI, 0);
+            }
+        }
+
+        function releaseArrow() {
+            if (pullAmount > 0.1) {
+                // Spawn projectile
+                const arrow = masterArrowModel.clone();
+                scene.add(arrow);
+                
+                // Set initial transform
+                arrow.position.copy(handArrow.position);
+                arrow.quaternion.copy(handArrow.quaternion);
+
+                // Calculate velocity
+                const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
+                const fireDir = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix);
+                const velocity = fireDir.multiplyScalar(pullAmount * ARCHERY_CONFIG.arrowSpeedMult);
+
+                activeArrows.push({ mesh: arrow, vel: velocity, life: 0 });
+
+                // Reset Hand state
+                handArrow.visible = false;
+                canSpawnArrow = false;
+                setTimeout(spawnNewHandArrow, 2000);
+            }
+
+            // Reset Bow
+            isDrawing = false;
+            isSnapped = false;
+            pullAmount = 0;
+            if (bowAction) {
+                bowAction.time = 0;
+                bowMixer.update(0);
+            }
+        }
+
+        function updateProjectiles(dt) {
+            for (let i = activeArrows.length - 1; i >= 0; i--) {
+                const a = activeArrows[i];
+                a.mesh.position.add(a.vel.clone().multiplyScalar(dt * 20));
+                a.vel.y -= 0.015; // Gravity
+
+                // Rotate arrow to face velocity
+                const target = a.mesh.position.clone().add(a.vel);
+                a.mesh.lookAt(target);
+                a.mesh.rotateX(Math.PI/2);
+                a.mesh.rotateY(Math.PI);
+
+                a.life += dt;
+                if (a.life > 10 || a.mesh.position.y < -5) {
+                    scene.remove(a.mesh);
+                    activeArrows.splice(i, 1);
+                }
+            }
+        }
+
+        function updatePlayerPhysics() {
             raycaster.ray.origin.copy(playerGroup.position);
             raycaster.ray.direction.set(0, -1, 0);
             const groundHits = raycaster.intersectObjects(collisionObjects);
-            player.isGrounded = groundHits.length > 0 && groundHits[0].distance < player.height + 0.1;
+            const isGrounded = groundHits.length > 0 && groundHits[0].distance < player.height + 0.1;
 
-            if (player.isGrounded) {
-                if (player.velocity < 0) { player.velocity = 0; player.jumpCount = 0; }
+            if (isGrounded) {
+                player.velocity = 0;
                 playerGroup.position.y = groundHits[0].point.y + player.height;
             } else {
                 player.velocity += player.gravity;
@@ -203,17 +333,14 @@
             }
 
             if (Math.abs(player.stick.x) > 0.1 || Math.abs(player.stick.y) > 0.1) {
-                const currentSpeed = player.isRunning ? player.runSpeed : player.walkSpeed;
                 const dir = new THREE.Vector3();
                 camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
-                playerGroup.position.addScaledVector(dir, -player.stick.y * currentSpeed);
-                playerGroup.position.addScaledVector(side, player.stick.x * currentSpeed);
+                playerGroup.position.addScaledVector(dir, -player.stick.y * player.walkSpeed);
+                playerGroup.position.addScaledVector(side, player.stick.x * player.walkSpeed);
             }
-
-            renderer.render(scene, camera);
-        });
+        }
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;

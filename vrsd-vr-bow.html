@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>VR Archery - Santos Dumont</title>
+    <title>3D VR Environment - Santos Dumont</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; touch-action: none; background: #000; }
@@ -25,6 +25,7 @@
     <div id="loading">
         <h1 id="load-status">Downloading World...</h1>
     </div>
+
     <button id="manual-vr-start">Start VR Experience</button>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
@@ -47,16 +48,16 @@
         document.body.appendChild(renderer.domElement);
 
         // --- VR CONTROLLERS ---
-        const controllerLeft = renderer.xr.getController(0);
-        const controllerRight = renderer.xr.getController(1);
-        const gripLeft = renderer.xr.getControllerGrip(0);
-        const gripRight = renderer.xr.getControllerGrip(1);
-        playerGroup.add(gripLeft, gripRight, controllerLeft, controllerRight);
+        const controllerGripLeft = renderer.xr.getControllerGrip(0);
+        const controllerGripRight = renderer.xr.getControllerGrip(1);
+        playerGroup.add(controllerGripLeft);
+        playerGroup.add(controllerGripRight);
 
         const vrButton = document.getElementById('manual-vr-start');
         vrButton.addEventListener('click', () => {
             if (navigator.xr) {
-                navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] }).then(async (session) => {
+                const sessionInit = { optionalFeatures: ['local-floor', 'bounded-floor'] };
+                navigator.xr.requestSession('immersive-vr', sessionInit).then(async (session) => {
                     await renderer.xr.setSession(session);
                     renderer.xr.setReferenceSpaceType('local-floor');
                     vrButton.style.display = 'none';
@@ -70,234 +71,128 @@
         scene.add(sun);
 
         const manager = new THREE.LoadingManager();
-        const loader = new THREE.GLTFLoader(manager);
-        const draco = new THREE.DRACOLoader();
-        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
-        loader.setDRACOLoader(draco);
-
+        const statusText = document.getElementById('load-status');
+        manager.onProgress = (url, l, t) => statusText.innerText = `Loading Assets: ${Math.round((l/t)*100)}%`;
         manager.onLoad = () => {
             document.getElementById('loading').style.display = 'none';
             vrButton.style.display = 'block';
         };
 
         const texLoader = new THREE.TextureLoader(manager);
+        texLoader.setCrossOrigin('anonymous');
         texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
             tex.mapping = THREE.EquirectangularReflectionMapping;
+            tex.encoding = THREE.sRGBEncoding;
             scene.background = tex;
             scene.environment = tex;
         });
 
-        // --- GAME STATE & MODELS ---
-        let bowModel, arrowMasterModel;
-        let activeArrows = [];
         const player = { 
             height: 1.3, walkSpeed: 0.12, runSpeed: 0.25,
             isRunning: false, velocity: 0, gravity: -0.012, 
-            isGrounded: false, stick: {x:0, y:0}
+            jumpForce: 0.4, jumpCount: 0, maxJumps: 2,
+            isGrounded: false, stick: {x:0, y:0},
+            aButtonLatch: false, bButtonLatch: false
         };
 
-        const archeryState = {
-            isSnapped: false,
-            isDrawing: false,
-            drawPower: 0,
-            maxDraw: 0.6,
-            snapThreshold: 0.15,
-            triggerPressed: false
-        };
-
+        const raycaster = new THREE.Raycaster();
         let collisionObjects = [];
+
+        const loader = new THREE.GLTFLoader(manager);
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+        
+        // Environment
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1_apache.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });
 
-        // Load Bow
+        // --- BOW (Left Hand) ---
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/bow.glb', (gltf) => {
-            bowModel = gltf.scene;
-            bowModel.rotation.x = Math.PI / 2;
-            bowModel.rotation.y = Math.PI; 
-            gripLeft.add(bowModel);
+            const bow = gltf.scene;
+            // X rotation accounts for the Blender Y/Z swap
+            bow.rotation.x = Math.PI / 2; 
+            // Y rotation is set to 0 to flip it 180 degrees away from the player
+            bow.rotation.y = Math.PI; 
+            // Small correction to keep it vertical in the hand
+            bow.rotation.z = 0; 
+            
+            controllerGripLeft.add(bow);
         });
 
-        // Load Arrow
+        // --- ARROW (Right Hand) ---
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
-            arrowMasterModel = gltf.scene;
-            arrowMasterModel.rotation.x = Math.PI / 2;
-            arrowMasterModel.rotation.y = Math.PI;
-            // The hand arrow is just a visual placeholder
-            const handArrow = arrowMasterModel.clone();
-            handArrow.name = "handArrow";
-            gripRight.add(handArrow);
+            const arrow = gltf.scene;
+            arrow.rotation.x = Math.PI / 2;
+            arrow.rotation.y = Math.PI;
+            controllerGripRight.add(arrow);
         });
 
-        const raycaster = new THREE.Raycaster();
-
-        // --- SHOOTING LOGIC ---
-        function handleArchery() {
-            if (!bowModel || !arrowMasterModel) return;
-
-            const bowPos = new THREE.Vector3();
-            const arrowPos = new THREE.Vector3();
-            gripLeft.getWorldPosition(bowPos);
-            gripRight.getWorldPosition(arrowPos);
-
-            const dist = bowPos.distanceTo(arrowPos);
-            const handArrow = gripRight.getObjectByName("handArrow");
-
-            // 1. Snapping logic
-            if (dist < archeryState.snapThreshold) {
-                if (!archeryState.isSnapped) {
-                    // Haptic pulse on snap if available
-                    const session = renderer.xr.getSession();
-                    if (session && session.inputSources[1].gamepad.hapticActuators) {
-                        session.inputSources[1].gamepad.hapticActuators[0].pulse(0.6, 50);
-                    }
-                }
-                archeryState.isSnapped = true;
-            } else if (!archeryState.isDrawing) {
-                archeryState.isSnapped = false;
-            }
-
-            // 2. Drawing logic
-            if (archeryState.isSnapped && archeryState.triggerPressed) {
-                archeryState.isDrawing = true;
-
-                // Project hand position onto bow's forward axis (Z-axis)
-                const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-                const drawDir = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
-                
-                const relativeVec = new THREE.Vector3().subVectors(arrowPos, bowPos);
-                // Calculate how much we are pulling back along the bow's axis
-                const pullAmount = -relativeVec.dot(drawDir); 
-                archeryState.drawPower = Math.max(0, Math.min(pullAmount, archeryState.maxDraw));
-
-                // Visually align hand arrow to the bow's rest position and slide back
-                if (handArrow) {
-                    handArrow.position.set(0, 0, 0);
-                    // Move it from the hand to world space momentarily to align with bow
-                    scene.attach(handArrow);
-                    handArrow.quaternion.setFromRotationMatrix(gripLeft.matrixWorld);
-                    // Add the fixed model rotations
-                    handArrow.rotateX(Math.PI / 2);
-                    handArrow.rotateY(Math.PI);
-                    
-                    // Apply the draw pull back
-                    const offset = drawDir.clone().multiplyScalar(-archeryState.drawPower);
-                    handArrow.position.copy(bowPos).add(offset);
-                }
-            } else {
-                // Reset hand arrow position when not drawing
-                if (handArrow) {
-                    gripRight.attach(handArrow);
-                    handArrow.position.set(0,0,0);
-                    handArrow.rotation.set(Math.PI/2, Math.PI, 0);
-                }
-                archeryState.isDrawing = false;
-            }
-        }
-
-        function fireArrow() {
-            if (!archeryState.isDrawing || archeryState.drawPower < 0.05) return;
-
-            const arrow = arrowMasterModel.clone();
-            scene.add(arrow);
-
-            // Set initial position and orientation
-            const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-            const fireDir = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
-            
-            const bowPos = new THREE.Vector3();
-            gripLeft.getWorldPosition(bowPos);
-            
-            arrow.position.copy(bowPos);
-            arrow.quaternion.setFromRotationMatrix(gripLeft.matrixWorld);
-            arrow.rotateX(Math.PI / 2);
-            arrow.rotateY(Math.PI);
-
-            // Physics state
-            const speed = archeryState.drawPower * 45; // Adjust for "oomph"
-            activeArrows.push({
-                mesh: arrow,
-                velocity: fireDir.multiplyScalar(speed),
-                life: 0
-            });
-
-            archeryState.isDrawing = false;
-            archeryState.drawPower = 0;
-        }
-
-        // --- RENDER LOOP ---
+        // --- VR RENDER LOOP ---
         renderer.setAnimationLoop(() => {
             const session = renderer.xr.getSession();
             if (session) {
                 for (const source of session.inputSources) {
-                    if (!source.gamepad) continue;
-                    const axes = source.gamepad.axes;
-                    const buttons = source.gamepad.buttons;
+                    if (source.gamepad) {
+                        const axes = source.gamepad.axes;
+                        const buttons = source.gamepad.buttons;
 
-                    if (source.handedness === 'left') {
-                        player.stick.x = axes[2] || axes[0];
-                        player.stick.y = axes[3] || axes[1];
-                    }
-                    if (source.handedness === 'right') {
-                        // Right Trigger (usually index 0)
-                        const trigger = buttons[0].pressed;
-                        if (trigger && !archeryState.triggerPressed) archeryState.triggerPressed = true;
-                        if (!trigger && archeryState.triggerPressed) {
-                            fireArrow();
-                            archeryState.triggerPressed = false;
+                        if (source.handedness === 'left') {
+                            player.stick.x = axes[2] || axes[0];
+                            player.stick.y = axes[3] || axes[1];
                         }
-
-                        const turnAxis = axes[2] || axes[0];
-                        if (Math.abs(turnAxis) > 0.7) playerGroup.rotation.y -= turnAxis * 0.05;
+                        if (source.handedness === 'right') {
+                            const turnAxis = axes[2] || axes[0];
+                            if (Math.abs(turnAxis) > 0.7) {
+                                playerGroup.rotation.y -= turnAxis * 0.05;
+                            }
+                            const aPressed = buttons[4] && buttons[4].pressed;
+                            if (aPressed && !player.aButtonLatch) {
+                                if (player.isGrounded || player.jumpCount < player.maxJumps) {
+                                    player.velocity = player.jumpForce;
+                                    player.jumpCount++;
+                                    player.isGrounded = false;
+                                }
+                                player.aButtonLatch = true;
+                            } else if (!aPressed) {
+                                player.aButtonLatch = false;
+                            }
+                            const bPressed = buttons[5] && buttons[5].pressed;
+                            if (bPressed && !player.bButtonLatch) {
+                                player.isRunning = !player.isRunning;
+                                player.bButtonLatch = true;
+                            } else if (!bPressed) {
+                                player.bButtonLatch = false;
+                            }
+                        }
                     }
                 }
             }
 
-            handleArchery();
-
-            // --- ARROW PHYSICS UPDATE ---
-            for (let i = activeArrows.length - 1; i >= 0; i--) {
-                const a = activeArrows[i];
-                a.mesh.position.add(a.velocity);
-                a.velocity.y -= 0.015; // Gravity
-                
-                // Rotation: Look towards velocity
-                const lookTarget = a.mesh.position.clone().add(a.velocity);
-                a.mesh.lookAt(lookTarget);
-                // Re-apply rotation corrections because lookAt ruins the model's native orientation
-                a.mesh.rotateX(Math.PI / 2);
-                a.mesh.rotateY(Math.PI);
-
-                a.life++;
-                if (a.life > 500 || a.mesh.position.y < -10) {
-                    scene.remove(a.mesh);
-                    activeArrows.splice(i, 1);
-                }
-            }
-
-            // --- PLAYER PHYSICS ---
             raycaster.ray.origin.copy(playerGroup.position);
             raycaster.ray.direction.set(0, -1, 0);
             const groundHits = raycaster.intersectObjects(collisionObjects);
             player.isGrounded = groundHits.length > 0 && groundHits[0].distance < player.height + 0.1;
 
             if (player.isGrounded) {
-                if (player.velocity < 0) player.velocity = 0;
+                if (player.velocity < 0) { player.velocity = 0; player.jumpCount = 0; }
                 playerGroup.position.y = groundHits[0].point.y + player.height;
             } else {
-                player.velocity += -0.01;
+                player.velocity += player.gravity;
                 playerGroup.position.y += player.velocity;
             }
 
             if (Math.abs(player.stick.x) > 0.1 || Math.abs(player.stick.y) > 0.1) {
+                const currentSpeed = player.isRunning ? player.runSpeed : player.walkSpeed;
                 const dir = new THREE.Vector3();
                 camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
-                playerGroup.position.addScaledVector(dir, -player.stick.y * player.walkSpeed);
-                playerGroup.position.addScaledVector(side, player.stick.x * player.walkSpeed);
+                playerGroup.position.addScaledVector(dir, -player.stick.y * currentSpeed);
+                playerGroup.position.addScaledVector(side, player.stick.x * currentSpeed);
             }
 
             renderer.render(scene, camera);

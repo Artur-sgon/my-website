@@ -38,7 +38,7 @@
 
     <div id="ui-container">
         <button id="manual-vr-start">Start VR Experience</button>
-        <div id="version-info">archery physics fixed</div>
+        <div id="version-info">axis problems</div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
@@ -106,7 +106,6 @@
             uiContainer.style.display = 'flex';
         };
 
-        // --- BACKGROUND FIX ---
         const texLoader = new THREE.TextureLoader(manager);
         texLoader.setCrossOrigin('anonymous');
         texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
@@ -121,7 +120,6 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
-        // Environment
         let collisionObjects = [];
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1_apache.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
@@ -129,10 +127,8 @@
             scene.add(gltf.scene);
         });
 
-        // Bow with Animation
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/bow.glb', (gltf) => {
             bowModel = gltf.scene;
-            // Alignment based on previous feedback
             bowModel.rotation.set(Math.PI/2, Math.PI, 0);
             gripLeft.add(bowModel);
 
@@ -144,7 +140,6 @@
             }
         });
 
-        // Arrow Model
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
             masterArrowModel = gltf.scene;
             spawnNewHandArrow();
@@ -163,7 +158,6 @@
         const raycaster = new THREE.Raycaster();
         const clock = new THREE.Clock();
 
-        // --- VR RENDER LOOP ---
         renderer.setAnimationLoop(() => {
             const delta = clock.getDelta();
             const session = renderer.xr.getSession();
@@ -193,7 +187,7 @@
             }
 
             updateArcheryLogic();
-            if (bowMixer) bowMixer.update(delta); // Animation update
+            if (bowMixer) bowMixer.update(delta);
             updateProjectiles(delta);
             updatePlayerPhysics();
 
@@ -210,7 +204,6 @@
 
             const dist = bowWorldPos.distanceTo(arrowWorldPos);
 
-            // Snap detection
             if (dist < ARCHERY_CONFIG.snapDistance && !isDrawing) {
                 isSnapped = true;
             } else if (!isDrawing) {
@@ -218,16 +211,14 @@
             }
 
             if (isSnapped) {
-                // Get the bow's forward (Z) vector in world space
+                // FIX: Use (0, 1, 0) because the bow is rotated 90deg on X. 
+                // Local Y is now the forward/pull axis.
                 const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-                const bowForwardZ = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
+                const bowForwardY = new THREE.Vector3(0, 1, 0).applyMatrix4(bowMatrix).normalize();
 
-                // Project hand position onto that Z axis
                 const toHandVec = new THREE.Vector3().subVectors(arrowWorldPos, bowWorldPos);
-                // Dot product gives us distance along that specific vector
-                const rawPull = -toHandVec.dot(bowForwardZ); 
+                const rawPull = -toHandVec.dot(bowForwardY); 
 
-                // Attach arrow to scene for free positioning aligned to bow
                 scene.attach(handArrow);
                 handArrow.quaternion.copy(new THREE.Quaternion());
                 const bowWorldQuat = new THREE.Quaternion();
@@ -240,14 +231,12 @@
                     isDrawing = true;
                     pullAmount = Math.max(0, Math.min(rawPull, ARCHERY_CONFIG.maxPull));
 
-                    // Update Animation based on Z-pull distance
                     if (bowAction) {
                         const duration = bowAction.getClip().duration;
                         bowAction.time = (pullAmount / ARCHERY_CONFIG.maxPull) * duration;
                     }
 
-                    // Place arrow along the Z axis relative to bow origin
-                    const offset = bowForwardZ.clone().multiplyScalar(-pullAmount);
+                    const offset = bowForwardY.clone().multiplyScalar(-pullAmount);
                     handArrow.position.copy(bowWorldPos).add(offset);
                 } else {
                     isDrawing = false;
@@ -256,7 +245,6 @@
                     if (bowAction) bowAction.time = 0;
                 }
             } else {
-                // Return to hand
                 gripRight.attach(handArrow);
                 handArrow.position.set(0,0,0);
                 handArrow.rotation.set(Math.PI/2, Math.PI, 0);
@@ -271,8 +259,9 @@
                 arrow.position.copy(handArrow.position);
                 arrow.quaternion.copy(handArrow.quaternion);
 
+                // FIX: Use (0, 1, 0) to match the pull direction logic above
                 const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-                const fireDir = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
+                const fireDir = new THREE.Vector3(0, 1, 0).applyMatrix4(bowMatrix).normalize();
                 const velocity = fireDir.multiplyScalar(pullAmount * ARCHERY_CONFIG.arrowSpeedMult);
 
                 activeArrows.push({ mesh: arrow, vel: velocity, life: 0 });
@@ -290,10 +279,9 @@
         function updateProjectiles(dt) {
             for (let i = activeArrows.length - 1; i >= 0; i--) {
                 const a = activeArrows[i];
-                // Scale movement by delta time
                 const moveStep = a.vel.clone().multiplyScalar(dt * 15);
                 a.mesh.position.add(moveStep);
-                a.vel.y -= 0.015; // Gravity
+                a.vel.y -= 0.015;
 
                 const target = a.mesh.position.clone().add(a.vel);
                 a.mesh.lookAt(target);

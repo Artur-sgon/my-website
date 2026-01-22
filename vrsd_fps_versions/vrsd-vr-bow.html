@@ -1,3 +1,4 @@
+--- START OF FILE vrsd-vr-bow.html ---
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -47,6 +48,13 @@
         renderer.outputEncoding = THREE.sRGBEncoding; 
         document.body.appendChild(renderer.domElement);
 
+        // --- VR CONTROLLERS SETUP ---
+        // We use "Grip" for held objects as it matches the palm orientation
+        const controllerGripLeft = renderer.xr.getControllerGrip(0);
+        const controllerGripRight = renderer.xr.getControllerGrip(1);
+        playerGroup.add(controllerGripLeft);
+        playerGroup.add(controllerGripRight);
+
         const vrButton = document.getElementById('manual-vr-start');
         vrButton.addEventListener('click', () => {
             if (navigator.xr) {
@@ -94,7 +102,6 @@
             maxJumps: 2,
             isGrounded: false, 
             stick: {x:0, y:0},
-            // Latches for VR buttons to prevent "spamming"
             aButtonLatch: false,
             bButtonLatch: false
         };
@@ -107,49 +114,77 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
+        // Load Environment
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1_apache.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
             gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });
 
+        // --- BOW AND ARROW IMPLEMENTATION ---
+        
+        // Left Hand: Bow
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/bow.glb', (gltf) => {
+            const bow = gltf.scene;
+            // Adjust scale if necessary, usually 1:1 in VR
+            bow.scale.set(1, 1, 1);
+            
+            // Orientation: Blender Y is forward, Z is up. 
+            // In Three.js, we rotate to make it look correct in the hand.
+            // Swap Y/Z logic: Rotate 90 deg on X to bring "up" from Blender to "up" in Three.js
+            bow.rotation.x = Math.PI / 2; 
+            // Adjust further so the bow is held vertically
+            bow.rotation.y = Math.PI; 
+            
+            controllerGripLeft.add(bow);
+        });
+
+        // Right Hand: Arrow
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
+            const arrow = gltf.scene;
+            arrow.scale.set(1, 1, 1);
+            
+            // Align arrow to point forward (out of the controller)
+            // Swapping Y for Z:
+            arrow.rotation.x = Math.PI / 2;
+            
+            controllerGripRight.add(arrow);
+        });
+
         // --- VR RENDER LOOP ---
         renderer.setAnimationLoop(() => {
             const session = renderer.xr.getSession();
             if (session) {
+                // Determine handedness and map axes
                 for (const source of session.inputSources) {
                     if (source.gamepad) {
                         const axes = source.gamepad.axes;
                         const buttons = source.gamepad.buttons;
 
-                        // LEFT CONTROLLER: Move
                         if (source.handedness === 'left') {
-                            player.stick.x = axes[2];
-                            player.stick.y = axes[3];
+                            player.stick.x = axes[2] || axes[0];
+                            player.stick.y = axes[3] || axes[1];
                         }
 
-                        // RIGHT CONTROLLER: Turn, Jump, Run
                         if (source.handedness === 'right') {
-                            // Turning
-                            if (Math.abs(axes[2]) > 0.7) {
-                                playerGroup.rotation.y -= axes[2] * 0.05;
+                            const turnAxis = axes[2] || axes[0];
+                            if (Math.abs(turnAxis) > 0.7) {
+                                playerGroup.rotation.y -= turnAxis * 0.05;
                             }
 
-                            // A Button (Index 4) -> Jump
-                            const aPressed = buttons[4].pressed;
+                            const aPressed = buttons[4] && buttons[4].pressed;
                             if (aPressed && !player.aButtonLatch) {
                                 if (player.isGrounded || player.jumpCount < player.maxJumps) {
                                     player.velocity = player.jumpForce;
                                     player.jumpCount++;
                                     player.isGrounded = false;
                                 }
-                                player.aButtonLatch = true; // Lock until released
+                                player.aButtonLatch = true;
                             } else if (!aPressed) {
-                                player.aButtonLatch = false; // Reset latch
+                                player.aButtonLatch = false;
                             }
 
-                            // B Button (Index 5) -> Toggle Run
-                            const bPressed = buttons[5].pressed;
+                            const bPressed = buttons[5] && buttons[5].pressed;
                             if (bPressed && !player.bButtonLatch) {
                                 player.isRunning = !player.isRunning;
                                 player.bButtonLatch = true;
@@ -170,7 +205,7 @@
             if (player.isGrounded) {
                 if (player.velocity < 0) {
                     player.velocity = 0;
-                    player.jumpCount = 0; // Reset double jump on ground
+                    player.jumpCount = 0;
                 }
                 playerGroup.position.y = groundHits[0].point.y + player.height;
             } else {
@@ -181,7 +216,6 @@
             // --- MOVEMENT ---
             if (Math.abs(player.stick.x) > 0.1 || Math.abs(player.stick.y) > 0.1) {
                 const currentSpeed = player.isRunning ? player.runSpeed : player.walkSpeed;
-                
                 const dir = new THREE.Vector3();
                 camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();

@@ -116,7 +116,7 @@
             // X rotation accounts for the Blender Y/Z swap
             bow.rotation.x = Math.PI / 2; 
             // Y rotation is set to 0 to flip it 180 degrees away from the player
-            bow.rotation.y = 0; 
+            bow.rotation.y = Math.PI; 
             // Small correction to keep it vertical in the hand
             bow.rotation.z = 0; 
             
@@ -127,6 +127,7 @@
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
             const arrow = gltf.scene;
             arrow.rotation.x = Math.PI / 2;
+            arrow.rotation.y = Math.PI;
             controllerGripRight.add(arrow);
         });
 

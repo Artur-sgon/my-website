@@ -38,7 +38,7 @@
 
     <div id="ui-container">
         <button id="manual-vr-start">Start VR Experience</button>
-        <div id="version-info">archery physics fixed v2</div>
+        <div id="version-info">sky and physics fixed v3</div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
@@ -68,16 +68,13 @@
         let bowModel, bowMixer, bowAction;
         let handArrow, masterArrowModel;
         let activeArrows = [];
-        let isSnapped = false;
-        let isDrawing = false;
-        let pullAmount = 0;
-        let canSpawnArrow = true;
-        let triggerPressed = false;
+        let isSnapped = false, isDrawing = false;
+        let pullAmount = 0, canSpawnArrow = true, triggerPressed = false;
 
         const ARCHERY_CONFIG = {
-            snapDistance: 0.2,
-            maxPull: 0.7,
-            arrowSpeedMult: 65
+            snapDistance: 0.25,
+            maxPull: 0.8,
+            arrowSpeedMult: 70
         };
 
         const vrButton = document.getElementById('manual-vr-start');
@@ -93,9 +90,10 @@
             }
         });
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-        sun.position.set(50, 50, 20);
+        // --- LIGHTING ---
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+        sun.position.set(50, 100, 50);
         scene.add(sun);
 
         const manager = new THREE.LoadingManager();
@@ -106,10 +104,11 @@
             uiContainer.style.display = 'flex';
         };
 
+        // --- SKYBOX FIX ---
         const texLoader = new THREE.TextureLoader(manager);
         texLoader.setCrossOrigin('anonymous');
         texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (tex) => {
-            tex.mapping = THREE.EquirectangularReflectionMapping;
+            tex.mapping = THREE.EquirectangularMapping; // Changed from ReflectionMapping
             tex.encoding = THREE.sRGBEncoding;
             scene.background = tex;
             scene.environment = tex;
@@ -120,18 +119,20 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
         
+        // Environment
+        let collisionObjects = [];
         loader.load('https://cdn.jsdelivr.net/gh/Artur-sgon/my-website@main/vrsd_v1_textures_1_apache.glb', (gltf) => {
             gltf.scene.scale.set(1.5, 1.5, 1.5);
-            gltf.scene.traverse(n => { if(n.isMesh) { n.receiveShadow = true; n.castShadow = true; } });
+            gltf.scene.traverse(n => { if(n.isMesh) collisionObjects.push(n); });
             scene.add(gltf.scene);
         });
 
+        // Bow
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/bow.glb', (gltf) => {
             bowModel = gltf.scene;
             bowModel.rotation.set(Math.PI/2, Math.PI, 0);
             gripLeft.add(bowModel);
-
-            if (gltf.animations && gltf.animations.length > 0) {
+            if (gltf.animations.length > 0) {
                 bowMixer = new THREE.AnimationMixer(bowModel);
                 bowAction = bowMixer.clipAction(gltf.animations[0]);
                 bowAction.play();
@@ -139,6 +140,7 @@
             }
         });
 
+        // Arrow
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/arrow.glb', (gltf) => {
             masterArrowModel = gltf.scene;
             spawnNewHandArrow();
@@ -166,16 +168,14 @@
                     if (!source.gamepad) continue;
                     const axes = source.gamepad.axes;
                     const btns = source.gamepad.buttons;
-
                     if (source.handedness === 'left') {
                         player.stick.x = axes[2] || axes[0];
                         player.stick.y = axes[3] || axes[1];
                     }
                     if (source.handedness === 'right') {
                         const trigger = btns[0].pressed;
-                        if (trigger && !triggerPressed) {
-                            triggerPressed = true;
-                        } else if (!trigger && triggerPressed) {
+                        if (trigger && !triggerPressed) triggerPressed = true;
+                        else if (!trigger && triggerPressed) {
                             if (isDrawing) releaseArrow();
                             triggerPressed = false;
                         }
@@ -186,38 +186,33 @@
             }
 
             updateArcheryLogic();
-            if (bowMixer) bowMixer.update(delta);
+            if (bowMixer) bowMixer.update(0); 
             updateProjectiles(delta);
             updatePlayerPhysics();
-
             renderer.render(scene, camera);
         });
 
         function updateArcheryLogic() {
             if (!bowModel || !handArrow || !canSpawnArrow) return;
 
-            const bowWorldPos = new THREE.Vector3();
-            const arrowWorldPos = new THREE.Vector3();
-            gripLeft.getWorldPosition(bowWorldPos);
-            gripRight.getWorldPosition(arrowWorldPos);
+            const bowWP = new THREE.Vector3(), arrowWP = new THREE.Vector3();
+            gripLeft.getWorldPosition(bowWP);
+            gripRight.getWorldPosition(arrowWP);
 
-            const dist = bowWorldPos.distanceTo(arrowWorldPos);
+            const dist = bowWP.distanceTo(arrowWP);
 
-            if (dist < ARCHERY_CONFIG.snapDistance && !isDrawing) {
-                isSnapped = true;
-            } else if (!isDrawing) {
-                isSnapped = false;
-            }
+            if (dist < ARCHERY_CONFIG.snapDistance && !isDrawing) isSnapped = true;
+            else if (!isDrawing) isSnapped = false;
 
             if (isSnapped) {
-                // THE FIX: We use the Y axis (0, 1, 0) as the firing line because
-                // the rotation.x = PI/2 turned the Blender Z axis into Three.js Y.
+                // THE FIX: We use the local Z axis (0,0,1) for the firing line.
+                // Because of rotation.x = PI/2, this points through the bow handle.
                 const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-                const firingLine = new THREE.Vector3(0, 1, 0).applyMatrix4(bowMatrix).normalize();
+                const firingLine = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
 
-                const toHandVec = new THREE.Vector3().subVectors(arrowWorldPos, bowWorldPos);
-                // Calculate distance along the firing line
-                const rawPull = toHandVec.dot(firingLine); 
+                const toHand = new THREE.Vector3().subVectors(arrowWP, bowWP);
+                // Calculate pull along the Z-axis. Reverse it so pulling towards the player is positive.
+                const rawPull = -toHand.dot(firingLine); 
 
                 scene.attach(handArrow);
                 const bowWorldQuat = new THREE.Quaternion();
@@ -228,21 +223,17 @@
 
                 if (triggerPressed) {
                     isDrawing = true;
-                    // Adjust pullAmount - we want positive values when pulling "back"
                     pullAmount = Math.max(0, Math.min(rawPull, ARCHERY_CONFIG.maxPull));
 
                     if (bowAction) {
                         const duration = bowAction.getClip().duration;
                         bowAction.time = (pullAmount / ARCHERY_CONFIG.maxPull) * duration;
                     }
-
-                    // Move arrow along that corrected firing line
-                    const offset = firingLine.clone().multiplyScalar(pullAmount);
-                    handArrow.position.copy(bowWorldPos).add(offset);
+                    const offset = firingLine.clone().multiplyScalar(-pullAmount);
+                    handArrow.position.copy(bowWP).add(offset);
                 } else {
-                    isDrawing = false;
-                    pullAmount = 0;
-                    handArrow.position.copy(bowWorldPos);
+                    isDrawing = false; pullAmount = 0;
+                    handArrow.position.copy(bowWP);
                     if (bowAction) bowAction.time = 0;
                 }
             } else {
@@ -260,62 +251,46 @@
                 arrow.position.copy(handArrow.position);
                 arrow.quaternion.copy(handArrow.quaternion);
 
-                // Use the same corrected firing line for the shot velocity
                 const bowMatrix = new THREE.Matrix4().extractRotation(gripLeft.matrixWorld);
-                const fireDir = new THREE.Vector3(0, 1, 0).applyMatrix4(bowMatrix).normalize();
-                
-                // We multiply by -1 if the arrow flies the opposite way of the pull
-                const velocity = fireDir.multiplyScalar(-pullAmount * ARCHERY_CONFIG.arrowSpeedMult);
+                const fireDir = new THREE.Vector3(0, 0, 1).applyMatrix4(bowMatrix).normalize();
+                const velocity = fireDir.multiplyScalar(pullAmount * ARCHERY_CONFIG.arrowSpeedMult);
 
                 activeArrows.push({ mesh: arrow, vel: velocity, life: 0 });
-
                 handArrow.visible = false;
                 canSpawnArrow = false;
                 setTimeout(spawnNewHandArrow, 2000);
             }
-            isDrawing = false;
-            isSnapped = false;
-            pullAmount = 0;
-            if (bowAction) bowAction.time = 0;
+            isDrawing = false; isSnapped = false; pullAmount = 0;
+            if (bowAction) { bowAction.time = 0; }
         }
 
         function updateProjectiles(dt) {
             for (let i = activeArrows.length - 1; i >= 0; i--) {
                 const a = activeArrows[i];
-                const moveStep = a.vel.clone().multiplyScalar(dt * 15);
-                a.mesh.position.add(moveStep);
+                a.mesh.position.add(a.vel.clone().multiplyScalar(dt * 15));
                 a.vel.y -= 0.015; 
-
                 const target = a.mesh.position.clone().add(a.vel);
                 a.mesh.lookAt(target);
                 a.mesh.rotateX(Math.PI/2);
                 a.mesh.rotateY(Math.PI);
-
                 a.life += dt;
-                if (a.life > 10 || a.mesh.position.y < -5) {
-                    scene.remove(a.mesh);
-                    activeArrows.splice(i, 1);
-                }
+                if (a.life > 10 || a.mesh.position.y < -5) { scene.remove(a.mesh); activeArrows.splice(i, 1); }
             }
         }
 
         function updatePlayerPhysics() {
             raycaster.ray.origin.copy(playerGroup.position);
             raycaster.ray.direction.set(0, -1, 0);
-            const groundHits = raycaster.intersectObjects(collisionObjects);
-            const isGrounded = groundHits.length > 0 && groundHits[0].distance < player.height + 0.1;
-
-            if (isGrounded) {
+            const hits = raycaster.intersectObjects(collisionObjects);
+            if (hits.length > 0 && hits[0].distance < player.height + 0.1) {
                 player.velocity = 0;
-                playerGroup.position.y = groundHits[0].point.y + player.height;
+                playerGroup.position.y = hits[0].point.y + player.height;
             } else {
                 player.velocity += player.gravity;
                 playerGroup.position.y += player.velocity;
             }
-
             if (Math.abs(player.stick.x) > 0.1 || Math.abs(player.stick.y) > 0.1) {
-                const dir = new THREE.Vector3();
-                camera.getWorldDirection(dir);
+                const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
                 dir.y = 0; dir.normalize();
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), dir).negate();
                 playerGroup.position.addScaledVector(dir, -player.stick.y * player.walkSpeed);

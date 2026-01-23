@@ -196,7 +196,7 @@
         const textureLoader = new THREE.TextureLoader();
         
         // Asset Loading
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
             gltf.scene.traverse(c => { if(c.isMesh) { c.castShadow = true; c.receiveShadow = true; collisionObjects.push(c); } });
             scene.add(gltf.scene);
             document.getElementById('loading').style.display = 'none';

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>S.E.5 VR Flight Simulator</title>
+    <title>VR Flight Simulator</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; background: #000; }
@@ -37,7 +37,7 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 50000);
         const playerGroup = new THREE.Group();
-        playerGroup.position.set(155, 300, 30); // Start higher for airplane flight
+        playerGroup.position.set(155, 300, 30); 
         playerGroup.add(camera);
         scene.add(playerGroup);
 
@@ -72,14 +72,13 @@
             s.setBuffer(buffer); s.setVolume(vol); s.play();
         }
 
-        // --- AIRPLANE STATE ---
+        // --- FLIGHT STATE ---
         const flight = {
             speed: 0,
             throttle: 0.5,
             pitch: 0,
             roll: 0,
-            yaw: 0,
-            bladeAngle: 0
+            yaw: 0
         };
 
         const weapon = {
@@ -105,7 +104,7 @@
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
 
-        let cockpit = null, propeller = null, collisionObjects = [];
+        let cockpit = null, collisionObjects = [];
 
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
             gltf.scene.traverse(c => { if(c.isMesh) { c.receiveShadow = true; collisionObjects.push(c); } });
@@ -116,13 +115,6 @@
             cockpit = gltf.scene;
             cockpit.position.set(0, 1, 0); 
             playerGroup.add(cockpit);
-        });
-
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-blades.glb', (gltf) => {
-            propeller = gltf.scene;
-            propeller.traverse(c => { if(c.isMesh) c.material.transparent = true; });
-            propeller.rotation.x = Math.PI / 2; // Rotate blades to face forward like a prop
-            playerGroup.add(propeller);
         });
 
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
@@ -173,17 +165,19 @@
                         const axes = source.gamepad.axes;
                         const buttons = source.gamepad.buttons;
 
-                        // LEFT CONTROLLER: Throttle (Stick Y) & Rudder (Stick X)
+                        // LEFT HAND: Throttle (Stick Y) & Rudder (Stick X)
                         if (source.handedness === 'left') {
                             flight.throttle = THREE.MathUtils.lerp(flight.throttle, (1 - axes[3]) / 2, 0.05);
                             yawInput = -axes[2] * 0.02;
                         }
 
-                        // RIGHT CONTROLLER: Pitch (Stick Y), Roll (Stick X) & Weapons
+                        // RIGHT HAND: Pitch (Stick Y) & Roll (Stick X)
                         if (source.handedness === 'right') {
-                            pitchInput = axes[3] * 0.025;
+                            // Standard Gamepad Stick: pulling back is positive Y (+1.0)
+                            pitchInput = axes[3] * 0.025; 
                             rollInput = -axes[2] * 0.05;
 
+                            // Cannon
                             const trigger = buttons[0].pressed || buttons[1].pressed; 
                             if(trigger) {
                                 weapon.isFiring = true;
@@ -193,6 +187,7 @@
                                 if(soundCannon.isPlaying) soundCannon.stop();
                             }
 
+                            // Missile
                             if((buttons[4]?.pressed || buttons[2]?.pressed) && now - missile.lastFired > missile.fireRate) {
                                 fireMissile();
                             }
@@ -201,37 +196,28 @@
                 }
 
                 // --- AIRPLANE PHYSICS ---
-                // 1. Calculate Speed (Acceleration vs Drag)
                 const targetSpeed = flight.throttle * 4.5; 
                 flight.speed = THREE.MathUtils.lerp(flight.speed, targetSpeed, 0.01);
 
-                // 2. Apply Rotations (Pitch, Roll, Yaw)
-                playerGroup.rotateX(-pitchInput);
+                // Apply Rotations
+                // Positive rotateX pitches up. Since axes[3] is positive when pulling back, we use pitchInput directly.
+                playerGroup.rotateX(pitchInput);
                 playerGroup.rotateZ(rollInput);
                 playerGroup.rotateY(yawInput);
 
-                // 3. Move Forward
+                // Move Forward
                 playerGroup.translateZ(-flight.speed);
 
-                // 4. Calculate Lift and Gravity
-                // Plane needs speed to stay up. If speed < 1.5, it starts to sink.
+                // Lift vs Gravity
                 const lift = (flight.speed * 0.12);
                 const gravity = 0.25;
                 playerGroup.position.y += (lift - gravity);
 
-                // --- ANIMATE PROPELLER ---
-                if(propeller) {
-                    flight.bladeAngle += (flight.speed * 0.5) + 0.1;
-                    propeller.rotation.z = flight.bladeAngle; // Rotation on Z because we rotated the mesh on X
-                    propeller.position.set(0, 1.2, -4); // Move to the nose
-                }
-
-                // --- WEAPONS UPDATE ---
+                // Weapons logic
                 if(weapon.isFiring && weapon.template && now - weapon.lastFired > weapon.fireRate) {
                     spawnBullet();
                     weapon.lastFired = now;
                 }
-
                 updateProjectiles();
             }
 
@@ -240,27 +226,22 @@
 
         function spawnBullet() {
             const b = weapon.template.clone();
-            // Spawn in front of nose
             const offset = new THREE.Vector3(0, 0, -5).applyQuaternion(playerGroup.quaternion);
             b.position.copy(playerGroup.position).add(offset);
-            
-            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerGroup.quaternion);
             b.quaternion.copy(playerGroup.quaternion);
-            
             scene.add(b);
+            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerGroup.quaternion);
             weapon.bullets.push({ mesh: b, vel: dir.multiplyScalar(flight.speed + 5.0), life: 100 });
         }
 
         function fireMissile() {
             if(!missile.template) return;
             missile.lastFired = Date.now();
-            
             const m = missile.template.clone();
             const sideOffset = 3.5 * missile.wingSide;
             const offset = new THREE.Vector3(sideOffset, 0, -2).applyQuaternion(playerGroup.quaternion);
             m.position.copy(playerGroup.position).add(offset);
             m.quaternion.copy(playerGroup.quaternion);
-            
             scene.add(m);
             const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerGroup.quaternion);
             missile.active.push({ mesh: m, vel: dir.multiplyScalar(flight.speed + 3.0), life: 200 });

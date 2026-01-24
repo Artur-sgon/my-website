@@ -75,7 +75,7 @@
         // --- APACHE STATE ---
         const flight = {
             pitch: 0, roll: 0, yaw: 0,
-            throttle: 0, targetThrottle: 0,
+            throttle: 0.7, targetThrottle: 0.7, // Set to 0.7 to hover immediately
             vVelocity: 0, yawVelocity: 0,
             bladeAngle: 0
         };
@@ -106,7 +106,7 @@
         let cockpit = null, blades = null, collisionObjects = [];
 
         // World
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
             gltf.scene.traverse(c => { if(c.isMesh) { c.receiveShadow = true; collisionObjects.push(c); } });
             scene.add(gltf.scene);
         });
@@ -114,6 +114,7 @@
         // Cockpit (Parented to PlayerGroup to stay with VR camera)
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
             cockpit = gltf.scene;
+            cockpit.position.set(0, -1.2, 0); // Offset down so VR camera is in the pilot's head
             playerGroup.add(cockpit);
         });
 
@@ -173,7 +174,7 @@
 
                         // LEFT CONTROLLER: Throttle & Roll
                         if (source.handedness === 'left') {
-                            flight.targetThrottle = THREE.MathUtils.lerp(0, 1.5, (1 - axes[3]) / 2); // Pull back to increase power
+                            flight.targetThrottle = THREE.MathUtils.lerp(0, 1.5, (1 - axes[3]) / 2); 
                             flight.roll = THREE.MathUtils.lerp(flight.roll, -axes[2] * 0.5, 0.1);
                         }
 
@@ -199,49 +200,45 @@
                         }
                     }
                 }
+
+                // --- FLIGHT PHYSICS (Only runs during VR session) ---
+                flight.throttle += (flight.targetThrottle - flight.throttle) * 0.02;
+                flight.yaw += flight.yawVelocity;
+
+                const heliRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(flight.pitch, flight.yaw, flight.roll, 'YXZ'));
+                playerGroup.quaternion.copy(heliRotation);
+
+                const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(heliRotation);
+                const side = new THREE.Vector3(1, 0, 0).applyQuaternion(heliRotation);
+                
+                const forwardSpeed = flight.throttle + (-flight.pitch * 0.5);
+                playerGroup.position.addScaledVector(fwd, forwardSpeed);
+                playerGroup.position.addScaledVector(side, -flight.roll * 0.5);
+
+                flight.vVelocity = (flight.throttle - 0.7) * 0.2; 
+                playerGroup.position.y += flight.vVelocity;
+
+                // --- ANIMATE BLADES ---
+                if(blades) {
+                    flight.bladeAngle += 0.5;
+                    blades.rotation.y = flight.bladeAngle;
+                    blades.position.set(0, 1.0, 1.5); // Adjusted to match the new cockpit height
+                }
+
+                // --- WEAPONS UPDATE ---
+                if(weapon.isFiring && weapon.template && now - weapon.lastFired > weapon.fireRate) {
+                    spawnBullet();
+                    weapon.lastFired = now;
+                }
+
+                updateProjectiles();
             }
-
-            // --- FLIGHT PHYSICS ---
-            flight.throttle += (flight.targetThrottle - flight.throttle) * 0.02;
-            flight.yaw += flight.yawVelocity;
-
-            const heliRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(flight.pitch, flight.yaw, flight.roll, 'YXZ'));
-            playerGroup.quaternion.copy(heliRotation);
-
-            // Forward/Sideways speed based on tilt
-            const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(heliRotation);
-            const side = new THREE.Vector3(1, 0, 0).applyQuaternion(heliRotation);
-            
-            // Speed components
-            const forwardSpeed = flight.throttle + (-flight.pitch * 0.5);
-            playerGroup.position.addScaledVector(fwd, forwardSpeed);
-            playerGroup.position.addScaledVector(side, -flight.roll * 0.5);
-
-            // Vertical Lift
-            flight.vVelocity = (flight.throttle - 0.7) * 0.2; // 0.7 is hover point roughly
-            playerGroup.position.y += flight.vVelocity;
-
-            // --- ANIMATE BLADES ---
-            if(blades) {
-                flight.bladeAngle += 0.5;
-                blades.rotation.y = flight.bladeAngle;
-                blades.position.set(0, 2.2, 1.5); // Local offset from pilot
-            }
-
-            // --- WEAPONS UPDATE ---
-            if(weapon.isFiring && weapon.template && now - weapon.lastFired > weapon.fireRate) {
-                spawnBullet();
-                weapon.lastFired = now;
-            }
-
-            updateProjectiles();
 
             renderer.render(scene, camera);
         });
 
         function spawnBullet() {
             const b = weapon.template.clone();
-            // Spawn below nose
             const offset = new THREE.Vector3(0, -1.5, -3).applyQuaternion(playerGroup.quaternion);
             b.position.copy(playerGroup.position).add(offset);
             
@@ -273,7 +270,6 @@
         function updateProjectiles() {
             const now = Date.now();
 
-            // Bullets
             for(let i = weapon.bullets.length - 1; i >= 0; i--) {
                 const b = weapon.bullets[i];
                 b.mesh.position.add(b.vel);
@@ -288,7 +284,6 @@
                 }
             }
 
-            // Missiles
             for(let i = missile.active.length - 1; i >= 0; i--) {
                 const m = missile.active[i];
                 m.mesh.position.add(m.vel);
@@ -306,7 +301,6 @@
                 }
             }
 
-            // Sprite Explosions
             for(let i = weapon.explosions.length - 1; i >= 0; i--) {
                 const ex = weapon.explosions[i];
                 if(now - ex.last > 30) {

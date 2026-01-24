@@ -79,7 +79,7 @@
             pitch: 0,
             roll: 0,
             yaw: 0,
-            vPitch: 0, // Velocity for smoothing
+            vPitch: 0, 
             vRoll: 0,
             vYaw: 0
         };
@@ -168,18 +168,15 @@
                         const axes = source.gamepad.axes;
                         const buttons = source.gamepad.buttons;
 
-                        // LEFT HAND: Throttle (Stick Y) & Rudder (Stick X)
                         if (source.handedness === 'left') {
                             flight.throttle = THREE.MathUtils.lerp(flight.throttle, (1 - axes[3]) / 2, 0.05);
                             targetYaw = -axes[2] * 0.02;
                         }
 
-                        // RIGHT HAND: Pitch (Stick Y) & Roll (Stick X)
                         if (source.handedness === 'right') {
                             targetPitch = axes[3] * 0.025; 
                             targetRoll = -axes[2] * 0.05;
 
-                            // Cannon
                             const trigger = buttons[0].pressed || buttons[1].pressed; 
                             if(trigger) {
                                 weapon.isFiring = true;
@@ -189,7 +186,6 @@
                                 if(soundCannon.isPlaying) soundCannon.stop();
                             }
 
-                            // Missile
                             if((buttons[4]?.pressed || buttons[2]?.pressed) && now - missile.lastFired > missile.fireRate) {
                                 fireMissile();
                             }
@@ -201,15 +197,18 @@
                 const targetSpeed = flight.throttle * 4.5; 
                 flight.speed = THREE.MathUtils.lerp(flight.speed, targetSpeed, 0.01);
 
-                // Polish: Bezier/Smoothing feel via velocity interpolation
+                // Bezier/Smoothing interpolation
                 flight.vPitch = THREE.MathUtils.lerp(flight.vPitch, targetPitch, 0.08);
                 flight.vRoll = THREE.MathUtils.lerp(flight.vRoll, targetRoll, 0.08);
                 flight.vYaw = THREE.MathUtils.lerp(flight.vYaw, targetYaw, 0.08);
 
-                // Polish: Nose-heavy "Gravity" feel (slowly pitch down if controls are neutral)
-                // The effect is stronger at higher speeds
+                // Polish: Gravity/Nose-heavy feel
+                // Find plane's local Up vector to determine which way is "down" relative to the world
+                const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(playerGroup.quaternion);
                 const noseHeavyBias = 0.0015 * (flight.speed / 4.5);
-                flight.vPitch += noseHeavyBias;
+                
+                // Subtracting bias * localUp.y ensures the nose always dips toward World Negative Y
+                flight.vPitch -= localUp.y * noseHeavyBias;
 
                 // Apply Rotations
                 playerGroup.rotateX(flight.vPitch);
@@ -224,7 +223,6 @@
                 const gravity = 0.25;
                 playerGroup.position.y += (lift - gravity);
 
-                // Weapons logic
                 if(weapon.isFiring && weapon.template && now - weapon.lastFired > weapon.fireRate) {
                     spawnBullet();
                     weapon.lastFired = now;

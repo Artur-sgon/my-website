@@ -78,10 +78,7 @@
             throttle: 0.5,
             pitch: 0,
             roll: 0,
-            yaw: 0,
-            vPitch: 0, // Velocity for smoothing
-            vRoll: 0,
-            vYaw: 0
+            yaw: 0
         };
 
         const weapon = {
@@ -159,9 +156,9 @@
             const now = Date.now();
 
             if (session) {
-                let targetPitch = 0;
-                let targetRoll = 0;
-                let targetYaw = 0;
+                let pitchInput = 0;
+                let rollInput = 0;
+                let yawInput = 0;
 
                 for (const source of session.inputSources) {
                     if (source.gamepad) {
@@ -171,13 +168,14 @@
                         // LEFT HAND: Throttle (Stick Y) & Rudder (Stick X)
                         if (source.handedness === 'left') {
                             flight.throttle = THREE.MathUtils.lerp(flight.throttle, (1 - axes[3]) / 2, 0.05);
-                            targetYaw = -axes[2] * 0.02;
+                            yawInput = -axes[2] * 0.02;
                         }
 
                         // RIGHT HAND: Pitch (Stick Y) & Roll (Stick X)
                         if (source.handedness === 'right') {
-                            targetPitch = axes[3] * 0.025; 
-                            targetRoll = -axes[2] * 0.05;
+                            // Standard Gamepad Stick: pulling back is positive Y (+1.0)
+                            pitchInput = axes[3] * 0.025; 
+                            rollInput = -axes[2] * 0.05;
 
                             // Cannon
                             const trigger = buttons[0].pressed || buttons[1].pressed; 
@@ -201,20 +199,11 @@
                 const targetSpeed = flight.throttle * 4.5; 
                 flight.speed = THREE.MathUtils.lerp(flight.speed, targetSpeed, 0.01);
 
-                // Polish: Bezier/Smoothing feel via velocity interpolation
-                flight.vPitch = THREE.MathUtils.lerp(flight.vPitch, targetPitch, 0.08);
-                flight.vRoll = THREE.MathUtils.lerp(flight.vRoll, targetRoll, 0.08);
-                flight.vYaw = THREE.MathUtils.lerp(flight.vYaw, targetYaw, 0.08);
-
-                // Polish: Nose-heavy "Gravity" feel (slowly pitch down if controls are neutral)
-                // The effect is stronger at higher speeds
-                const noseHeavyBias = 0.0015 * (flight.speed / 4.5);
-                flight.vPitch += noseHeavyBias;
-
                 // Apply Rotations
-                playerGroup.rotateX(flight.vPitch);
-                playerGroup.rotateZ(flight.vRoll);
-                playerGroup.rotateY(flight.vYaw);
+                // Positive rotateX pitches up. Since axes[3] is positive when pulling back, we use pitchInput directly.
+                playerGroup.rotateX(pitchInput);
+                playerGroup.rotateZ(rollInput);
+                playerGroup.rotateY(yawInput);
 
                 // Move Forward
                 playerGroup.translateZ(-flight.speed);

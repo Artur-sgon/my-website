@@ -114,7 +114,7 @@
         // Cockpit (Parented to PlayerGroup to stay with VR camera)
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/ah-64-apache-cockpit.glb', (gltf) => {
             cockpit = gltf.scene;
-            cockpit.position.set(0, -1.2, 0); // Offset down so VR camera is in the pilot's head
+            cockpit.position.set(0, 0, 0); // Offset down so VR camera is in the pilot's head
             playerGroup.add(cockpit);
         });
 

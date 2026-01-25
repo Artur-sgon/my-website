@@ -3,62 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SE5 Flight Simulator - Hangar Selection</title>
+    <title>Flight Simulator - Select Aircraft</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; background: #000; }
         
-        /* UI Overlays */
+        /* Loading Screen */
         #loading { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: #000; color: #2ecc71; display: none; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 2000;
+            background: #000; color: white; display: none;
+            flex-direction: column; justify-content: center; align-items: center; z-index: 1000;
         }
 
+        /* Main Menu */
         #menu {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(0,0,0,0.9); display: flex; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 3000;
-            color: white; text-align: center;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; color: #2ecc71; z-index: 2000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
-        #menu h1 { font-size: 4rem; margin-bottom: 2rem; color: #2ecc71; text-shadow: 0 0 10px #2ecc71; }
-        .btn-group { display: flex; gap: 20px; }
+        /* GLOW REMOVED */
+        h1 { font-size: 3rem; margin-bottom: 2rem; } 
+        
         .ship-btn {
             background: transparent; border: 2px solid #2ecc71; color: #2ecc71;
-            padding: 15px 30px; font-size: 1.5rem; cursor: pointer; font-family: 'VT323', monospace;
-            transition: 0.3s;
+            font-family: 'VT323', monospace; font-size: 1.5rem; padding: 10px 30px;
+            margin: 10px; cursor: pointer; width: 300px; transition: 0.2s;
         }
-        .ship-btn:hover { background: #2ecc71; color: black; box-shadow: 0 0 20px #2ecc71; }
+        .ship-btn:hover { background: #2ecc71; color: #000; }
 
+        /* Game UI */
         #ui {
             position: absolute; top: 20px; left: 20px; color: #2ecc71;
-            font-size: 1.5rem; pointer-events: none; text-shadow: 2px 2px #000; display: none;
+            font-size: 1.5rem; pointer-events: none;
+            display: none;
         }
         #instructions {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
             color: white; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 10px;
-            text-align: center; pointer-events: none; display: none;
+            text-align: center; pointer-events: none;
+            display: none;
         }
         #crosshair {
             position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
             border: 2px solid rgba(46, 204, 113, 0.7); border-radius: 50%;
-            transform: translate(-50%, -50%); pointer-events: none; display: none;
+            transform: translate(-50%, -50%); pointer-events: none;
+            display: none;
         }
     </style>
 </head>
 <body>
-    <!-- Aircraft Selection Menu -->
+
+    <!-- MENU -->
     <div id="menu">
         <h1>SELECT AIRCRAFT</h1>
-        <div class="btn-group">
-            <button class="ship-btn" onclick="initFlight('se5.glb')">SE-5</button>
-            <button class="ship-btn" onclick="initFlight('apache.glb')">APACHE</button>
-            <button class="ship-btn" onclick="initFlight('wyvern.glb')">WYVERN</button>
-        </div>
+        <button class="ship-btn" onclick="selectAircraft('se5')">SE-5 SCOUT</button>
+        <button class="ship-btn" onclick="selectAircraft('apache')">AH-64 APACHE</button>
+        <button class="ship-btn" onclick="selectAircraft('wyvern')">X-02 WYVERN</button>
     </div>
 
+    <!-- LOADING -->
     <div id="loading"><h1 id="load-status">Initialising Flight Systems...</h1></div>
-    
+
+    <!-- HUD -->
     <div id="ui">
         SPD: <span id="ui-speed">0</span> km/h<br>
         THR: <span id="ui-throttle">50</span>%<br>
@@ -72,11 +78,37 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
 
     <script>
+        // --- CONFIGURATION ---
+        // Added camDist (Z offset) and camY (Height) for specific camera settings per plane
+        const AIRCRAFT_DATA = {
+            'se5': {
+                url: 'https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/se5.glb',
+                isHeli: false,
+                camDist: 10, 
+                camY: 5
+            },
+            'apache': {
+                url: 'https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache.glb',
+                isHeli: true,
+                camDist: 20,
+                camY: 12
+            },
+            'wyvern': {
+                url: 'https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/wyvern.glb',
+                isHeli: false,
+                camDist: 20,
+                camY: 12
+            }
+        };
+
+        // --- GLOBAL VARIABLES ---
+        let selectedShipType = null;
+        let mixer = null; 
+        const clock = new THREE.Clock();
+
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 50000);
-        const clock = new THREE.Clock();
-        let mixer; // For animations (rotors)
-
+        
         const playerGroup = new THREE.Group();
         playerGroup.position.set(155, 300, 30); 
         scene.add(playerGroup);
@@ -84,15 +116,19 @@
         const prevShipPos = new THREE.Vector3().copy(playerGroup.position);
         let lastSpeed = 0;
 
-        // --- CAMERA RIG ---
         const cameraRig = new THREE.Group();
         cameraRig.position.copy(playerGroup.position);
         scene.add(cameraRig);
 
         const cameraOrbitPivot = new THREE.Group();
         cameraRig.add(cameraOrbitPivot);
-        const baseCamDistance = 22; 
-        camera.position.set(0, 10, baseCamDistance); 
+        cameraOrbitPivot.position.set(0, 0, 0);
+        
+        // These will be updated when aircraft is selected
+        let baseCamDistance = 20;
+        let baseCamY = 12;
+
+        camera.position.set(0, baseCamY, baseCamDistance); 
         camera.lookAt(0, 2, 0); 
         cameraOrbitPivot.add(camera);
 
@@ -102,13 +138,17 @@
         renderer.outputEncoding = THREE.sRGBEncoding;
         document.body.appendChild(renderer.domElement);
 
-        let targetYaw = 0, targetPitch = 0.2, currentYaw = 0, currentPitch = 0;
+        // --- CONTROLS VARS ---
+        let targetYaw = 0;
+        let targetPitch = 0.2; 
+        let currentYaw = 0;
+        let currentPitch = 0;
         const sensitivity = 0.005;
+        const keys = {};
 
+        // --- SETUP INPUTS ---
         renderer.domElement.addEventListener('click', () => {
-            if(document.getElementById('menu').style.display === 'none') {
-                renderer.domElement.requestPointerLock();
-            }
+            if(selectedShipType) renderer.domElement.requestPointerLock();
         });
 
         window.addEventListener('mousemove', (e) => {
@@ -118,17 +158,16 @@
                 targetPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, targetPitch));
             }
         });
-
-        const keys = {};
         window.addEventListener('keydown', (e) => keys[e.code] = true);
         window.addEventListener('keyup', (e) => keys[e.code] = false);
         window.addEventListener('wheel', (e) => {
             flight.throttle = Math.min(1, Math.max(0, flight.throttle - e.deltaY * 0.0005));
         });
-
         window.addEventListener('mousedown', (e) => { 
-            if(e.button === 0) weapon.isFiring = true; 
-            if(e.button === 2) fireMissile(); 
+            if(selectedShipType) {
+                if(e.button === 0) weapon.isFiring = true; 
+                if(e.button === 2) fireMissile(); 
+            }
         });
         window.addEventListener('mouseup', (e) => { if(e.button === 0) weapon.isFiring = false; });
         window.oncontextmenu = (e) => e.preventDefault();
@@ -140,53 +179,40 @@
         const soundCannon = new THREE.Audio(listener);
         let bufferLaunch = null, bufferBoom = null;
         const audioLoader = new THREE.AudioLoader();
-        
+
+        // --- GAME LOGIC VARS ---
         const flight = { speed: 0, throttle: 0.5, vPitch: 0, vRoll: 0, vYaw: 0 };
         const weapon = { isFiring: false, lastFired: 0, fireRate: 100, bullets: [], explosions: [], template: null, burstTexture: null };
         const missile = { active: [], template: null, lastFired: 0, fireRate: 2000, wingSide: 1 };
+        let collisionObjects = [];
+        const raycaster = new THREE.Raycaster();
 
+        // --- LOADERS ---
         const manager = new THREE.LoadingManager();
         const loader = new THREE.GLTFLoader(manager);
         const draco = new THREE.DRACOLoader();
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
-
-        // Pre-load common assets
-        let collisionObjects = [];
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
-            gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
-            scene.add(gltf.scene);
-        });
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
-            weapon.template = gltf.scene; weapon.template.scale.set(0.3, 0.3, 1);
-        });
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hellfire.glb', (gltf) => {
-            missile.template = gltf.scene;
-        });
-
         const texLoader = new THREE.TextureLoader(manager);
-        texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
-            t.mapping = THREE.EquirectangularReflectionMapping;
-            scene.background = t; scene.environment = t;
-        });
-        weapon.burstTexture = texLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png');
-        weapon.burstTexture.repeat.set(1/7, 1);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
-        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-        sun.position.set(50, 100, 50);
-        scene.add(sun);
-
-        const raycaster = new THREE.Raycaster();
-
-        // --- START GAME LOGIC ---
-        function initFlight(modelFile) {
+        // --- MENU SELECTION FUNCTION ---
+        function selectAircraft(type) {
+            selectedShipType = type;
             document.getElementById('menu').style.display = 'none';
             document.getElementById('loading').style.display = 'flex';
-            
-            // Audio initialization
+            loadGameAssets();
+        }
+
+        function loadGameAssets() {
+            // Apply Camera Settings based on selection
+            const config = AIRCRAFT_DATA[selectedShipType];
+            baseCamDistance = config.camDist;
+            baseCamY = config.camY;
+            camera.position.set(0, baseCamY, baseCamDistance);
+
+            // Load Sounds
             audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', (b) => {
-                soundEngine.setBuffer(b); soundEngine.setLoop(true); soundEngine.setVolume(0.2); soundEngine.play();
+                soundEngine.setBuffer(b); soundEngine.setLoop(true); soundEngine.setVolume(0.2);
             });
             audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', (b) => {
                 soundCannon.setBuffer(b); soundCannon.setLoop(true); soundCannon.setVolume(0.4);
@@ -194,37 +220,69 @@
             audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/missile_launch.mp3', (b) => bufferLaunch = b);
             audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/boom.mp3', (b) => bufferBoom = b);
 
-            // Load Selected Model
-            loader.load(modelFile, (gltf) => {
+            // Load Environment
+            loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
+                gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
+                scene.add(gltf.scene);
+            });
+
+            // Load Selected Aircraft
+            loader.load(config.url, (gltf) => {
                 const model = gltf.scene;
                 
-                // Special handling for Apache
-                if(modelFile === 'apache.glb') {
-                    model.rotation.y = Math.PI; // Rotate 180 degrees
-                }
-
-                // Setup animations for rotors etc
-                if (gltf.animations && gltf.animations.length) {
-                    mixer = new THREE.AnimationMixer(model);
-                    gltf.animations.forEach(clip => {
-                        mixer.clipAction(clip).play();
-                    });
+                // Specific Apache Adjustments
+                if (config.isHeli) {
+                    model.rotation.y = Math.PI; 
+                    if (gltf.animations.length > 0) {
+                        mixer = new THREE.AnimationMixer(model);
+                        gltf.animations.forEach((clip) => {
+                            mixer.clipAction(clip).play();
+                        });
+                    }
                 }
 
                 playerGroup.add(model);
-                
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('ui').style.display = 'block';
-                document.getElementById('instructions').style.display = 'block';
-                document.getElementById('crosshair').style.display = 'block';
-                animate();
             });
+
+            // Load Weapons
+            loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
+                weapon.template = gltf.scene; weapon.template.scale.set(0.3, 0.3, 1);
+            });
+            loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hellfire.glb', (gltf) => {
+                missile.template = gltf.scene;
+            });
+
+            // Load Skybox
+            texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+                t.mapping = THREE.EquirectangularReflectionMapping;
+                scene.background = t; scene.environment = t;
+            });
+            weapon.burstTexture = texLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png');
+            weapon.burstTexture.repeat.set(1/7, 1);
         }
+
+        // --- WHEN LOADING FINISHED ---
+        manager.onLoad = () => {
+            if(!selectedShipType) return;
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('ui').style.display = 'block';
+            document.getElementById('instructions').style.display = 'block';
+            document.getElementById('crosshair').style.display = 'block';
+            soundEngine.play();
+            animate();
+        };
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(50, 100, 50);
+        scene.add(sun);
 
         function animate() {
             requestAnimationFrame(animate);
-            const now = Date.now();
+            if(!selectedShipType) return;
+
             const delta = clock.getDelta();
+            const now = Date.now();
 
             if (mixer) mixer.update(delta);
 
@@ -248,7 +306,7 @@
             playerGroup.translateZ(-flight.speed);
             playerGroup.position.y += (flight.speed * 0.12) - 0.25;
 
-            // --- CAMERA INERTIA ---
+            // --- CAMERA LOGIC ---
             const shipMovement = new THREE.Vector3().subVectors(playerGroup.position, prevShipPos);
             cameraRig.position.add(shipMovement);
             prevShipPos.copy(playerGroup.position);
@@ -258,7 +316,11 @@
 
             const deltaSpeed = flight.speed - lastSpeed;
             camera.position.z += deltaSpeed * 35.0; 
+            
+            // Lerp towards the specific distance for the selected aircraft
             camera.position.z = THREE.MathUtils.lerp(camera.position.z, baseCamDistance, 0.05);
+            camera.position.y = THREE.MathUtils.lerp(camera.position.y, baseCamY, 0.05); // Smooth Y adjust too
+
             lastSpeed = flight.speed;
 
             currentYaw = THREE.MathUtils.lerp(currentYaw, targetYaw, 0.1);
@@ -336,6 +398,12 @@
             const mat = new THREE.SpriteMaterial({ map: t, transparent: true, blending: THREE.AdditiveBlending });
             const s = new THREE.Sprite(mat); s.position.copy(pos); s.scale.set(scale, scale, scale);
             scene.add(s); weapon.explosions.push({ mesh: s, tex: t, frame: 0, last: Date.now() });
+        }
+
+        function playOneShot(buffer, vol = 1.0) {
+            if(!buffer) return;
+            const s = new THREE.Audio(listener);
+            s.setBuffer(buffer); s.setVolume(vol); s.play();
         }
 
         window.addEventListener('resize', () => {

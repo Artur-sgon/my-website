@@ -1,37 +1,64 @@
---- START OF FILE space-ship.html ---
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SE5 Flight Simulator - Inertial Speed Cam</title>
+    <title>SE5 Flight Simulator - Hangar Selection</title>
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; background: #000; }
+        
+        /* UI Overlays */
         #loading { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: #000; color: white; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 1000;
+            background: #000; color: #2ecc71; display: none; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 2000;
         }
+
+        #menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.9); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 3000;
+            color: white; text-align: center;
+        }
+        #menu h1 { font-size: 4rem; margin-bottom: 2rem; color: #2ecc71; text-shadow: 0 0 10px #2ecc71; }
+        .btn-group { display: flex; gap: 20px; }
+        .ship-btn {
+            background: transparent; border: 2px solid #2ecc71; color: #2ecc71;
+            padding: 15px 30px; font-size: 1.5rem; cursor: pointer; font-family: 'VT323', monospace;
+            transition: 0.3s;
+        }
+        .ship-btn:hover { background: #2ecc71; color: black; box-shadow: 0 0 20px #2ecc71; }
+
         #ui {
             position: absolute; top: 20px; left: 20px; color: #2ecc71;
-            font-size: 1.5rem; pointer-events: none; text-shadow: 2px 2px #000;
+            font-size: 1.5rem; pointer-events: none; text-shadow: 2px 2px #000; display: none;
         }
         #instructions {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
             color: white; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 10px;
-            text-align: center; pointer-events: none;
+            text-align: center; pointer-events: none; display: none;
         }
         #crosshair {
             position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
             border: 2px solid rgba(46, 204, 113, 0.7); border-radius: 50%;
-            transform: translate(-50%, -50%); pointer-events: none;
+            transform: translate(-50%, -50%); pointer-events: none; display: none;
         }
     </style>
 </head>
 <body>
+    <!-- Aircraft Selection Menu -->
+    <div id="menu">
+        <h1>SELECT AIRCRAFT</h1>
+        <div class="btn-group">
+            <button class="ship-btn" onclick="initFlight('se5.glb')">SE-5</button>
+            <button class="ship-btn" onclick="initFlight('apache.glb')">APACHE</button>
+            <button class="ship-btn" onclick="initFlight('wyvern.glb')">WYVERN</button>
+        </div>
+    </div>
+
     <div id="loading"><h1 id="load-status">Initialising Flight Systems...</h1></div>
+    
     <div id="ui">
         SPD: <span id="ui-speed">0</span> km/h<br>
         THR: <span id="ui-throttle">50</span>%<br>
@@ -47,25 +74,25 @@
     <script>
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 50000);
-        
+        const clock = new THREE.Clock();
+        let mixer; // For animations (rotors)
+
         const playerGroup = new THREE.Group();
         playerGroup.position.set(155, 300, 30); 
         scene.add(playerGroup);
 
         const prevShipPos = new THREE.Vector3().copy(playerGroup.position);
-        let lastSpeed = 0; // Added to track acceleration
+        let lastSpeed = 0;
 
+        // --- CAMERA RIG ---
         const cameraRig = new THREE.Group();
         cameraRig.position.copy(playerGroup.position);
         scene.add(cameraRig);
 
         const cameraOrbitPivot = new THREE.Group();
         cameraRig.add(cameraOrbitPivot);
-        cameraOrbitPivot.position.set(0, 0, 0);
-        
-        // Final Camera placement
-        const baseCamDistance = 20; // Default distance behind ship
-        camera.position.set(0, 12, baseCamDistance); 
+        const baseCamDistance = 22; 
+        camera.position.set(0, 10, baseCamDistance); 
         camera.lookAt(0, 2, 0); 
         cameraOrbitPivot.add(camera);
 
@@ -75,14 +102,13 @@
         renderer.outputEncoding = THREE.sRGBEncoding;
         document.body.appendChild(renderer.domElement);
 
-        let targetYaw = 0;
-        let targetPitch = 0.2; 
-        let currentYaw = 0;
-        let currentPitch = 0;
+        let targetYaw = 0, targetPitch = 0.2, currentYaw = 0, currentPitch = 0;
         const sensitivity = 0.005;
 
         renderer.domElement.addEventListener('click', () => {
-            renderer.domElement.requestPointerLock();
+            if(document.getElementById('menu').style.display === 'none') {
+                renderer.domElement.requestPointerLock();
+            }
         });
 
         window.addEventListener('mousemove', (e) => {
@@ -114,39 +140,22 @@
         const soundCannon = new THREE.Audio(listener);
         let bufferLaunch = null, bufferBoom = null;
         const audioLoader = new THREE.AudioLoader();
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', (b) => {
-            soundEngine.setBuffer(b); soundEngine.setLoop(true); soundEngine.setVolume(0.2);
-        });
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', (b) => {
-            soundCannon.setBuffer(b); soundCannon.setLoop(true); soundCannon.setVolume(0.4);
-        });
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/missile_launch.mp3', (b) => bufferLaunch = b);
-        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/boom.mp3', (b) => bufferBoom = b);
-
-        function playOneShot(buffer, vol = 1.0) {
-            if(!buffer) return;
-            const s = new THREE.Audio(listener);
-            s.setBuffer(buffer); s.setVolume(vol); s.play();
-        }
-
+        
         const flight = { speed: 0, throttle: 0.5, vPitch: 0, vRoll: 0, vYaw: 0 };
         const weapon = { isFiring: false, lastFired: 0, fireRate: 100, bullets: [], explosions: [], template: null, burstTexture: null };
         const missile = { active: [], template: null, lastFired: 0, fireRate: 2000, wingSide: 1 };
 
         const manager = new THREE.LoadingManager();
-        manager.onLoad = () => { document.getElementById('loading').style.display = 'none'; soundEngine.play(); };
         const loader = new THREE.GLTFLoader(manager);
         const draco = new THREE.DRACOLoader();
         draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
         loader.setDRACOLoader(draco);
 
+        // Pre-load common assets
         let collisionObjects = [];
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
             gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
             scene.add(gltf.scene);
-        });
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/space_ship.glb', (gltf) => {
-            playerGroup.add(gltf.scene);
         });
         loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
             weapon.template = gltf.scene; weapon.template.scale.set(0.3, 0.3, 1);
@@ -170,9 +179,54 @@
 
         const raycaster = new THREE.Raycaster();
 
+        // --- START GAME LOGIC ---
+        function initFlight(modelFile) {
+            document.getElementById('menu').style.display = 'none';
+            document.getElementById('loading').style.display = 'flex';
+            
+            // Audio initialization
+            audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', (b) => {
+                soundEngine.setBuffer(b); soundEngine.setLoop(true); soundEngine.setVolume(0.2); soundEngine.play();
+            });
+            audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', (b) => {
+                soundCannon.setBuffer(b); soundCannon.setLoop(true); soundCannon.setVolume(0.4);
+            });
+            audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/missile_launch.mp3', (b) => bufferLaunch = b);
+            audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/boom.mp3', (b) => bufferBoom = b);
+
+            // Load Selected Model
+            loader.load(modelFile, (gltf) => {
+                const model = gltf.scene;
+                
+                // Special handling for Apache
+                if(modelFile === 'apache.glb') {
+                    model.rotation.y = Math.PI; // Rotate 180 degrees
+                }
+
+                // Setup animations for rotors etc
+                if (gltf.animations && gltf.animations.length) {
+                    mixer = new THREE.AnimationMixer(model);
+                    gltf.animations.forEach(clip => {
+                        mixer.clipAction(clip).play();
+                    });
+                }
+
+                playerGroup.add(model);
+                
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('ui').style.display = 'block';
+                document.getElementById('instructions').style.display = 'block';
+                document.getElementById('crosshair').style.display = 'block';
+                animate();
+            });
+        }
+
         function animate() {
             requestAnimationFrame(animate);
             const now = Date.now();
+            const delta = clock.getDelta();
+
+            if (mixer) mixer.update(delta);
 
             // --- FLIGHT CONTROLS ---
             let movePitch = 0, moveRoll = 0, moveYaw = 0;
@@ -194,32 +248,19 @@
             playerGroup.translateZ(-flight.speed);
             playerGroup.position.y += (flight.speed * 0.12) - 0.25;
 
-            // --- CAMERA VELOCITY & SPEED DELAY LOGIC ---
-            
-            // 1. Maintain constant distance logic (Velocity Compensation)
+            // --- CAMERA INERTIA ---
             const shipMovement = new THREE.Vector3().subVectors(playerGroup.position, prevShipPos);
             cameraRig.position.add(shipMovement);
             prevShipPos.copy(playerGroup.position);
 
-            // 2. The Rotation/Turning Delay (Lerp toward ship)
             cameraRig.position.lerp(playerGroup.position, 0.1);
             cameraRig.quaternion.slerp(playerGroup.quaternion, 0.05);
 
-            // 3. NEW: Speed Change Inertia (Acceleration Lag)
-            // Calculate how much the speed changed since last frame
             const deltaSpeed = flight.speed - lastSpeed;
-            
-            // Push camera back if speeding up, pull forward if slowing down
-            // 35.0 is the intensity of the "kick"
             camera.position.z += deltaSpeed * 35.0; 
-            
-            // Constantly lerp the camera back to its home distance (20)
-            // This ensures distance is constant at any steady speed
             camera.position.z = THREE.MathUtils.lerp(camera.position.z, baseCamDistance, 0.05);
-            
             lastSpeed = flight.speed;
 
-            // --- MOUSE ORBIT INSIDE RIG ---
             currentYaw = THREE.MathUtils.lerp(currentYaw, targetYaw, 0.1);
             currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.1);
             cameraOrbitPivot.rotation.set(-currentPitch, currentYaw, 0, 'YXZ');
@@ -301,8 +342,6 @@
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-
-        animate();
     </script>
 </body>
 </html>

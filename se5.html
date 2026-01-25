@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SE5 Desktop Flight Simulator</title>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'VT323', monospace; background: #000; }
+        #loading { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: #000; color: white; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 1000;
+        }
+        #ui {
+            position: absolute; top: 20px; left: 20px; color: #2ecc71;
+            font-size: 1.5rem; pointer-events: none; text-shadow: 2px 2px #000;
+        }
+        #instructions {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: white; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 10px;
+            text-align: center; pointer-events: none;
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
+            border: 2px solid rgba(46, 204, 113, 0.7); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading"><h1 id="load-status">Initialising Flight Systems...</h1></div>
+    <div id="ui">
+        SPD: <span id="ui-speed">0</span> km/h<br>
+        THR: <span id="ui-throttle">50</span>%<br>
+        ALT: <span id="ui-alt">0</span> m
+    </div>
+    <div id="instructions">CLICK TO LOCK MOUSE (FPS LOOK) | W/S: PITCH | A/D: ROLL | Q/E: RUDDER | WHEEL: THROTTLE</div>
+    <div id="crosshair"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/DRACOLoader.js"></script>
+
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 50000);
+        
+        const playerGroup = new THREE.Group();
+        playerGroup.position.set(155, 300, 30); 
+        scene.add(playerGroup);
+
+        const cameraContainer = new THREE.Group();
+        cameraContainer.position.set(0, 1.1, 0.08); 
+        cameraContainer.add(camera);
+        playerGroup.add(cameraContainer);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        document.body.appendChild(renderer.domElement);
+
+        // --- FPS MOUSE LOOK LOGIC ---
+        let targetYaw = 0;
+        let targetPitch = 0;
+        let currentYaw = 0;
+        let currentPitch = 0;
+        let currentRoll = 0; // Added roll for banking lean
+        const sensitivity = 0.002;
+
+        renderer.domElement.addEventListener('click', () => {
+            renderer.domElement.requestPointerLock();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === renderer.domElement) {
+                targetYaw -= e.movementX * sensitivity;
+                targetPitch -= e.movementY * sensitivity;
+                targetPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, targetPitch));
+            }
+        });
+
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+        window.addEventListener('wheel', (e) => {
+            flight.throttle = Math.min(1, Math.max(0, flight.throttle - e.deltaY * 0.0005));
+        });
+
+        window.addEventListener('mousedown', (e) => { 
+            if(e.button === 0) weapon.isFiring = true; 
+            if(e.button === 2) fireMissile(); 
+        });
+        window.addEventListener('mouseup', (e) => { if(e.button === 0) weapon.isFiring = false; });
+        window.oncontextmenu = (e) => e.preventDefault();
+
+        // --- AUDIO ---
+        const listener = new THREE.AudioListener();
+        camera.add(listener);
+        const soundEngine = new THREE.Audio(listener);
+        const soundCannon = new THREE.Audio(listener);
+        let bufferLaunch = null, bufferBoom = null;
+        const audioLoader = new THREE.AudioLoader();
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/rotor_cockpit.mp3', (b) => {
+            soundEngine.setBuffer(b); soundEngine.setLoop(true); soundEngine.setVolume(0.2);
+        });
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/cannon.mp3', (b) => {
+            soundCannon.setBuffer(b); soundCannon.setLoop(true); soundCannon.setVolume(0.4);
+        });
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/missile_launch.mp3', (b) => bufferLaunch = b);
+        audioLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_fps_versions/SoundFX/boom.mp3', (b) => bufferBoom = b);
+
+        function playOneShot(buffer, vol = 1.0) {
+            if(!buffer) return;
+            const s = new THREE.Audio(listener);
+            s.setBuffer(buffer); s.setVolume(vol); s.play();
+        }
+
+        const flight = { speed: 0, throttle: 0.5, vPitch: 0, vRoll: 0, vYaw: 0 };
+        const weapon = { isFiring: false, lastFired: 0, fireRate: 100, bullets: [], explosions: [], template: null, burstTexture: null };
+        const missile = { active: [], template: null, lastFired: 0, fireRate: 2000, wingSide: 1 };
+
+        const manager = new THREE.LoadingManager();
+        manager.onLoad = () => { document.getElementById('loading').style.display = 'none'; soundEngine.play(); };
+        const loader = new THREE.GLTFLoader(manager);
+        const draco = new THREE.DRACOLoader();
+        draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(draco);
+
+        let collisionObjects = [];
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/fernando_de_noronha.glb', (gltf) => {
+            gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
+            scene.add(gltf.scene);
+        });
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/se5.glb', (gltf) => {
+            playerGroup.add(gltf.scene);
+            gltf.scene.position.set(0, 1, 0);
+        });
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/apache_bullet.glb', (gltf) => {
+            weapon.template = gltf.scene; weapon.template.scale.set(0.3, 0.3, 1);
+        });
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hellfire.glb', (gltf) => {
+            missile.template = gltf.scene;
+        });
+
+        const texLoader = new THREE.TextureLoader(manager);
+        texLoader.load('https://i.imgur.com/WN0Wmas.jpeg', (t) => {
+            t.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = t; scene.environment = t;
+        });
+        weapon.burstTexture = texLoader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/hit_burst.png');
+        weapon.burstTexture.repeat.set(1/7, 1);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(50, 100, 50);
+        scene.add(sun);
+
+        const raycaster = new THREE.Raycaster();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const now = Date.now();
+
+            // --- AIRPLANE PHYSICS ---
+            let movePitch = 0, moveRoll = 0, moveYaw = 0;
+            if (keys['KeyW']) movePitch = -0.01;
+            if (keys['KeyS']) movePitch = 0.01;
+            if (keys['KeyA']) moveRoll = 0.02;
+            if (keys['KeyD']) moveRoll = -0.02;
+            if (keys['KeyQ']) moveYaw = 0.007;
+            if (keys['KeyE']) moveYaw = -0.007;
+
+            flight.speed = THREE.MathUtils.lerp(flight.speed, flight.throttle * 5.0, 0.01);
+            flight.vPitch = THREE.MathUtils.lerp(flight.vPitch, movePitch, 0.08);
+            flight.vRoll = THREE.MathUtils.lerp(flight.vRoll, moveRoll, 0.08);
+            flight.vYaw = THREE.MathUtils.lerp(flight.vYaw, moveYaw, 0.08);
+
+            playerGroup.rotateX(flight.vPitch);
+            playerGroup.rotateZ(flight.vRoll);
+            playerGroup.rotateY(flight.vYaw);
+            playerGroup.translateZ(-flight.speed);
+
+            playerGroup.position.y += (flight.speed * 0.12) - 0.25;
+
+            // --- CAMERA & INERTIAL LAG LOGIC ---
+            // We calculate a target that includes both user mouse look AND a lag offset 
+            // based on the plane's current rotation velocity.
+            // (Negative velocity creates the "resisting" inertia feel)
+            let inertialLagPitch = targetPitch - (flight.vPitch * 8.0);
+            let inertialLagYaw = targetYaw - (flight.vYaw * 12.0);
+            let inertialLagRoll = -(flight.vRoll * 4.0);
+
+            // Smoothly lerp the current camera view toward that inertial target
+            currentYaw = THREE.MathUtils.lerp(currentYaw, inertialLagYaw, 0.1);
+            currentPitch = THREE.MathUtils.lerp(currentPitch, inertialLagPitch, 0.1);
+            currentRoll = THREE.MathUtils.lerp(currentRoll, inertialLagRoll, 0.1);
+
+            cameraContainer.rotation.set(currentPitch, currentYaw, currentRoll, 'YXZ');
+
+            // --- UI & WEAPONS ---
+            document.getElementById('ui-speed').innerText = Math.round(flight.speed * 100);
+            document.getElementById('ui-throttle').innerText = Math.round(flight.throttle * 100);
+            document.getElementById('ui-alt').innerText = Math.round(playerGroup.position.y);
+
+            if(weapon.isFiring && weapon.template && now - weapon.lastFired > weapon.fireRate) {
+                spawnBullet(); weapon.lastFired = now;
+                if(!soundCannon.isPlaying) soundCannon.play();
+            } else if (!weapon.isFiring && soundCannon.isPlaying) {
+                soundCannon.stop();
+            }
+
+            updateProjectiles();
+            renderer.render(scene, camera);
+        }
+
+        function spawnBullet() {
+            const b = weapon.template.clone();
+            const offset = new THREE.Vector3(0, 0.5, -5).applyQuaternion(playerGroup.quaternion);
+            b.position.copy(playerGroup.position).add(offset);
+            b.quaternion.copy(playerGroup.quaternion);
+            scene.add(b);
+            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerGroup.quaternion);
+            weapon.bullets.push({ mesh: b, vel: dir.multiplyScalar(flight.speed + 8.0), life: 100 });
+        }
+
+        function fireMissile() {
+            if(!missile.template || Date.now() - missile.lastFired < missile.fireRate) return;
+            missile.lastFired = Date.now();
+            const m = missile.template.clone();
+            const offset = new THREE.Vector3(3.5 * missile.wingSide, 0, -2).applyQuaternion(playerGroup.quaternion);
+            m.position.copy(playerGroup.position).add(offset);
+            m.quaternion.copy(playerGroup.quaternion);
+            scene.add(m);
+            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerGroup.quaternion);
+            missile.active.push({ mesh: m, vel: dir.multiplyScalar(flight.speed + 4.0), life: 200 });
+            playOneShot(bufferLaunch, 0.6);
+            missile.wingSide *= -1;
+        }
+
+        function updateProjectiles() {
+            const now = Date.now();
+            for(let i = weapon.bullets.length - 1; i >= 0; i--) {
+                const b = weapon.bullets[i]; b.mesh.position.add(b.vel);
+                if(--b.life <= 0) { scene.remove(b.mesh); weapon.bullets.splice(i, 1); }
+            }
+            for(let i = missile.active.length - 1; i >= 0; i--) {
+                const m = missile.active[i]; m.mesh.position.add(m.vel);
+                raycaster.set(m.mesh.position, m.vel.clone().normalize());
+                const hits = raycaster.intersectObjects(collisionObjects);
+                if(hits.length > 0 && hits[0].distance < 15) {
+                    createExplosion(hits[0].point, 8.0);
+                    const dist = camera.position.distanceTo(hits[0].point);
+                    setTimeout(() => playOneShot(bufferBoom, 1.0), (dist/343)*1000);
+                    scene.remove(m.mesh); missile.active.splice(i, 1);
+                } else if(--m.life <= 0) { scene.remove(m.mesh); missile.active.splice(i, 1); }
+            }
+            for(let i = weapon.explosions.length - 1; i >= 0; i--) {
+                const ex = weapon.explosions[i];
+                if(now - ex.last > 30) {
+                    if(++ex.frame > 6) { scene.remove(ex.mesh); weapon.explosions.splice(i, 1); }
+                    else { ex.tex.offset.x = ex.frame / 7; ex.last = now; }
+                }
+            }
+        }
+
+        function createExplosion(pos, scale) {
+            const t = weapon.burstTexture.clone(); t.needsUpdate = true;
+            const mat = new THREE.SpriteMaterial({ map: t, transparent: true, blending: THREE.AdditiveBlending });
+            const s = new THREE.Sprite(mat); s.position.copy(pos); s.scale.set(scale, scale, scale);
+            scene.add(s); weapon.explosions.push({ mesh: s, tex: t, frame: 0, last: Date.now() });
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

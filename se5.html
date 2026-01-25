@@ -129,7 +129,7 @@
         loader.setDRACOLoader(draco);
 
         let collisionObjects = [];
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/fernando_de_noronha.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/land.glb', (gltf) => {
             gltf.scene.traverse(c => { if(c.isMesh) collisionObjects.push(c); });
             scene.add(gltf.scene);
         });

@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Flight Core Controller</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+        
+        /* Container da Interface (HUD) */
+        #ui-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        /* Texto de Informação */
+        #hud-info {
+            position: absolute;
+            bottom: 20px; left: 20px;
+            color: #ffffff;
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 1px 1px 0 #000;
+            background-color: rgba(0, 20, 0, 0.5);
+            padding: 15px;
+            border-radius: 6px;
+        }
+        /* Instruções */
+        #instructions {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            text-align: center;
+            border: 1px solid white;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- HUD -->
+    <div id="ui-container">          
+        <div id="hud-info">
+            POTÊNCIA: <span id="throttle-val">50%</span><br>
+            VELOCIDADE: <span id="speed-val">0</span> km/h<br>
+            ALTITUDE: <span id="alt-val">0</span> m<br>
+        </div>
+        <div id="instructions">
+            <h1>CLIQUE PARA INICIAR</h1>
+            W,A,S,D - Controlar<br>
+            Q,E - Leme (Yaw)<br>
+            SCROLL MOUSE - Potência do Motor<br>
+            MOUSE - Direção Fina
+        </div>
+    </div>
+
+    <!-- Import Map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "lil-gui": "https://unpkg.com/lil-gui@0.19.1/dist/lil-gui.esm.min.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        // =============================================================================
+        // 1. IMPORTS
+        // =============================================================================
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import Stats from 'three/addons/libs/stats.module.js';
+        import GUI from 'lil-gui';
+
+        // =============================================================================
+        // 2. CONFIGURAÇÕES E ESTADO (FIEL AO ORIGINAL)
+        // =============================================================================
+        
+        // Gerenciamento Centralizado de Estado
+        const players = new Map(); 
+        let localPlayerId = "local_pilot";
+
+        // Variáveis de controle do Game Loop
+        const PHYSICS_STEP = 1 / 120; // Física a 120Hz
+        let accumulator = 0;
+        let lastTime = performance.now();
+
+        // Controle de FPS do Render
+        let fpsLimit = 30; 
+        let renderInterval = 1000 / fpsLimit;
+        let lastRenderTime = 0;
+
+        // Inputs
+        const inputState = {
+            keys: { w: false, s: false, a: false, d: false, q: false, e: false, shift: false, space: false },
+            mouse: { x: 0, y: 0, deltaX: 0, deltaY: 0, isDown: false, wheelDelta: 0 }, 
+            pointerLocked: false
+        };
+
+        // Constantes de Física (Copiadas exatamente do original)
+        const CONSTANTS = {
+            PLANE: {
+                MAX_SPEED: 1200.0,
+                MIN_SPEED: 0.0,
+                ACCELERATION: 2.0,
+                
+                PITCH_MAX_SPEED: 0.04,     
+                PITCH_ACCEL: 0.002,        
+                PITCH_FRICTION: 0.96,      
+
+                ROLL_MAX_SPEED: 0.04,      
+                ROLL_ACCEL: 0.002,         
+                ROLL_FRICTION: 0.96,
+
+                YAW_MAX_SPEED: 0.02,       
+                YAW_ACCEL: 0.001,          
+                YAW_FRICTION: 0.90,        
+
+                CAMERA_DIST_Z: 25.0,
+                CAMERA_DIST_Y: 6.0,
+                CAMERA_LERP: 0.6, // Ajustado para padrão jogável
+                FOV_BASE: 60,           
+                FOV_MULTIPLIER: 0.005,
+            },
+            GAMEPLAY: {
+                COLLISION_BOUNCE: 100.0,
+            }
+        };
+
+        // Variáveis Globais Three.js
+        let scene, camera, renderer, stats, controls;
+
+        // Variáveis de Reuso (Zero Allocation - Otimização Original)
+        const _tempVec3_1 = new THREE.Vector3();
+        const _tempVec3_3 = new THREE.Vector3();
+        const _tempQuat_1 = new THREE.Quaternion();
+        const _tempEuler_1 = new THREE.Euler();
+        
+        const _camOffset = new THREE.Vector3();
+        const _camLookTarget = new THREE.Vector3();
+        const _planeUp = new THREE.Vector3();      
+        const _camSmoothQuat = new THREE.Quaternion();
+
+        // =============================================================================
+        // 3. INICIALIZAÇÃO
+        // =============================================================================
+
+        function init() {
+            // Cena e Câmera
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Fundo Azul Céu
+            scene.fog = new THREE.Fog(0x87CEEB, 1000, 40000); // Neblina simples para profundidade
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100000);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            // Luz
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(100, 1000, 100);
+            scene.add(dirLight);
+
+            // Stats
+            stats = new Stats();
+            document.body.appendChild(stats.dom);
+
+            // Carregar Assets
+            loadAssets();
+
+            // Inputs e GUI
+            initControls();
+            setupInputListeners();
+            initGUI();
+
+            // Evento Resize
+            window.addEventListener('resize', onWindowResize);
+
+            // Iniciar Loop
+            animate();
+        }
+
+        function loadAssets() {
+            const loader = new GLTFLoader();
+
+            // 1. Carregar Terreno (URL Solicitada)
+            const terrainUrl = 'https://dl.dropboxusercontent.com/scl/fi/zwbmvhasz89use9j1ksc2/Plano-Padr-o-Prototipagem-com-Terreno350km.glb?rlkey=wu14liwxm5k1qyqwbfpn8lkps';
+            loader.load(terrainUrl, (gltf) => {
+                const terrain = gltf.scene;
+                terrain.traverse((c) => {
+                    if(c.isMesh) {
+                        c.material.roughness = 1.0;
+                    }
+                });
+                terrain.scale.set(1, 1, 1);
+                scene.add(terrain);
+                console.log("Cenário Carregado.");
+            });
+
+            // 2. Carregar Avião (Original)
+            const planeUrl = 'https://dl.dropboxusercontent.com/scl/fi/ggsnn3qeo51go3dpf15uy/Vi-o-1.glb?rlkey=pi4uo67m6bexrg47p4m56rsbj';
+            loader.load(planeUrl, (gltf) => {
+                const model = gltf.scene;
+                const planeGroup = new THREE.Group();
+                
+                // Configuração Visual do Avião
+                model.scale.set(1.0, 1.0, 1.0);
+                model.rotation.y = Math.PI; 
+
+                model.traverse((child) => {
+                    if (child.name === 'Hélice_Nova') {
+                        planeGroup.userData.propeller = child;
+                    }
+                });
+
+                planeGroup.add(model);
+                scene.add(planeGroup);
+
+                // Estado Inicial do Jogador
+                const initialPos = new THREE.Vector3(0, 200, 0); // Começa voando baixo
+
+                const newPlayer = {
+                    id: localPlayerId,
+                    mesh: planeGroup,
+                    state: {
+                        position: initialPos.clone(),
+                        quaternion: new THREE.Quaternion(),
+                        rotationalVelocity: { pitch: 0, roll: 0, yaw: 0 },
+                        speed: 300.0, // Velocidade inicial
+                        throttle: 0.5,
+                        propAngle: 0
+                    }
+                };
+                
+                planeGroup.position.copy(initialPos);
+                players.set(localPlayerId, newPlayer);
+                console.log("Avião pronto.");
+            });
+        }
+
+        // =============================================================================
+        // 4. CONTROLES E INPUT (INPUT SYSTEM)
+        // =============================================================================
+
+        function initControls() {
+            const instructions = document.getElementById('instructions');
+            controls = new PointerLockControls(camera, document.body);
+
+            instructions.addEventListener('click', () => controls.lock());
+            controls.addEventListener('lock', () => {
+                instructions.style.display = 'none';
+                inputState.pointerLocked = true;
+            });
+            controls.addEventListener('unlock', () => {
+                instructions.style.display = 'block';
+                inputState.pointerLocked = false;
+            });
+        }
+
+        function setupInputListeners() {
+            // Mouse Delta
+            document.addEventListener('mousemove', (event) => {
+                if (inputState.pointerLocked) {
+                    inputState.mouse.deltaX += event.movementX;
+                    inputState.mouse.deltaY += event.movementY;
+                }
+            });
+
+            // Scroll (Throttle)
+            document.addEventListener('wheel', (e) => {
+                inputState.mouse.wheelDelta = e.deltaY * 0.001; 
+            });
+
+            // Teclado
+            const onKey = (e, pressed) => {
+                switch(e.code) {
+                    case 'ArrowUp': case 'KeyW': inputState.keys.w = pressed; break;
+                    case 'ArrowLeft': case 'KeyA': inputState.keys.a = pressed; break;
+                    case 'ArrowDown': case 'KeyS': inputState.keys.s = pressed; break;
+                    case 'ArrowRight': case 'KeyD': inputState.keys.d = pressed; break;
+                    case 'KeyQ': inputState.keys.q = pressed; break;
+                    case 'KeyE': inputState.keys.e = pressed; break;
+                    case 'Space': inputState.keys.space = pressed; break;
+                    case 'ShiftLeft': case 'ShiftRight': inputState.keys.shift = pressed; break;
+                }
+            };
+
+            document.addEventListener('keydown', (e) => onKey(e, true));
+            document.addEventListener('keyup', (e) => onKey(e, false));
+        }
+
+        function initGUI() {
+            const gui = new GUI({ title: 'Controles de Voo' });
+            
+            const folderPhys = gui.addFolder('Física e Motor');
+            folderPhys.add(CONSTANTS.PLANE, 'MAX_SPEED', 100, 3000).name('Velocidade Máx');
+            folderPhys.add(CONSTANTS.PLANE, 'ACCELERATION', 0.1, 5.0).name('Aceleração');
+            
+            const folderCam = gui.addFolder('Câmera');
+            folderCam.add(CONSTANTS.PLANE, 'CAMERA_DIST_Z', 5.0, 100.0).name('Distância');
+            folderCam.add(CONSTANTS.PLANE, 'CAMERA_DIST_Y', 0.0, 50.0).name('Altura');
+            folderCam.add(CONSTANTS.PLANE, 'CAMERA_LERP', 0.01, 1.0).name('Suavidade (Lerp)');
+            folderCam.add(CONSTANTS.PLANE, 'FOV_MULTIPLIER', 0.0, 0.1).name('Efeito Velocidade');
+
+            const folderControl = gui.addFolder('Sensibilidade');
+            folderControl.add(CONSTANTS.PLANE, 'ROLL_MAX_SPEED', 0.01, 0.2).name('Velocidade Roll');
+            folderControl.add(CONSTANTS.PLANE, 'PITCH_MAX_SPEED', 0.01, 0.2).name('Velocidade Pitch');
+        }
+
+        // =============================================================================
+        // 5. LÓGICA DE JOGO (PHYSICS CORE) - FIEL AO ORIGINAL
+        // =============================================================================
+
+        function processLocalInput() {
+            const player = players.get(localPlayerId);
+            if (!player) return;
+
+            // Throttle via Scroll
+            if (inputState.mouse.wheelDelta !== 0) {
+                player.state.throttle -= inputState.mouse.wheelDelta;
+                player.state.throttle = Math.max(0, Math.min(1, player.state.throttle));
+                inputState.mouse.wheelDelta = 0; 
+            }
+        }
+
+        function handlePlaneMovement(player, deltaTime) {
+            const state = player.state;
+            const keys = inputState.keys;
+            const CFG = CONSTANTS.PLANE;
+
+            // 1. Atualizar Velocidade
+            const targetSpeed = state.throttle * CFG.MAX_SPEED;
+            const lerpFactor = 2.0 * deltaTime; 
+            state.speed += (targetSpeed - state.speed) * lerpFactor; 
+            if (state.speed < CFG.MIN_SPEED) state.speed = CFG.MIN_SPEED;
+
+            // 2. Sensibilidade e Controles
+            const MOUSE_SENSITIVITY = 0.001; 
+            const MOUSE_FORCE_GAIN = 0.25; 
+
+            let deltaX = inputState.mouse.deltaX;
+            let deltaY = inputState.mouse.deltaY;
+            inputState.mouse.deltaX = 0;
+            inputState.mouse.deltaY = 0;
+
+            const timeScale = deltaTime * 60.0; 
+
+            // Pitch
+            let keyPitch = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
+            if (keyPitch !== 0) state.rotationalVelocity.pitch += keyPitch * CFG.PITCH_ACCEL * timeScale;
+            if (deltaY !== 0) state.rotationalVelocity.pitch += (deltaY * -1) * MOUSE_SENSITIVITY * MOUSE_FORCE_GAIN;
+            if (keyPitch === 0 && deltaY === 0) state.rotationalVelocity.pitch *= Math.pow(CFG.PITCH_FRICTION, timeScale);
+            state.rotationalVelocity.pitch = Math.max(-CFG.PITCH_MAX_SPEED, Math.min(CFG.PITCH_MAX_SPEED, state.rotationalVelocity.pitch));
+
+            // Roll
+            let inputRoll = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
+            if (inputRoll !== 0) state.rotationalVelocity.roll += inputRoll * CFG.ROLL_ACCEL * timeScale;
+            else state.rotationalVelocity.roll *= Math.pow(CFG.ROLL_FRICTION, timeScale);
+            state.rotationalVelocity.roll = Math.max(-CFG.ROLL_MAX_SPEED, Math.min(CFG.ROLL_MAX_SPEED, state.rotationalVelocity.roll));
+
+            // Yaw
+            let keyYaw = (keys.q ? 1 : 0) - (keys.e ? 1 : 0);
+            if (keyYaw !== 0) state.rotationalVelocity.yaw += keyYaw * CFG.YAW_ACCEL * timeScale;
+            if (deltaX !== 0) state.rotationalVelocity.yaw += (deltaX * -1) * MOUSE_SENSITIVITY * MOUSE_FORCE_GAIN;
+            if (keyYaw === 0 && deltaX === 0) state.rotationalVelocity.yaw *= Math.pow(CFG.YAW_FRICTION, timeScale);
+            state.rotationalVelocity.yaw = Math.max(-CFG.YAW_MAX_SPEED, Math.min(CFG.YAW_MAX_SPEED, state.rotationalVelocity.yaw));
+
+            // 3. Aplicar Rotação
+            _tempEuler_1.set(
+                state.rotationalVelocity.pitch, 
+                state.rotationalVelocity.yaw, 
+                state.rotationalVelocity.roll, 
+                'XYZ' 
+            );
+            _tempQuat_1.setFromEuler(_tempEuler_1);
+            
+            state.quaternion.multiply(_tempQuat_1);
+            state.quaternion.normalize();
+
+            // 4. Mover o Avião
+            _tempVec3_1.set(0, 0, -1).applyQuaternion(state.quaternion);
+            state.position.add(_tempVec3_1.multiplyScalar(state.speed * deltaTime));
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // =============================================================================
+        // 6. LOOP PRINCIPAL (ANIMATE)
+        // =============================================================================
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const now = performance.now();
+            let frameTime = (now - lastTime) / 1000;
+            lastTime = now;
+
+            // Proteção contra travamentos
+            if (frameTime > 0.25) frameTime = 0.25;
+
+            accumulator += frameTime;
+
+            // --- LOOP DE FÍSICA (120Hz) ---
+            while (accumulator >= PHYSICS_STEP) {
+                const player = players.get(localPlayerId);
+                if (player) {
+                    processLocalInput();
+                    handlePlaneMovement(player, PHYSICS_STEP);
+
+                    // Sincroniza Malha
+                    player.mesh.position.copy(player.state.position);
+                    player.mesh.quaternion.copy(player.state.quaternion);
+
+                    // Animação da Hélice
+                    player.state.propAngle += 0.3 + (player.state.throttle * 0.8);
+                    if (player.mesh.userData.propeller) {
+                        player.mesh.userData.propeller.rotation.z = player.state.propAngle;
+                    }
+                }
+                accumulator -= PHYSICS_STEP;
+            }
+
+            // --- LOOP DE RENDER (30FPS Limit) ---
+            const timeSinceLastRender = now - lastRenderTime;
+            if (timeSinceLastRender < renderInterval) return;
+
+            lastRenderTime = now - (timeSinceLastRender % renderInterval);
+            const dtRender = timeSinceLastRender / 1000;
+
+            stats.update();
+
+            // Atualização de Câmera e HUD
+            const player = players.get(localPlayerId);
+            if (player) {
+                const CFG = CONSTANTS.PLANE;
+
+                // Câmera Lerp
+                const lerpSpeed = CFG.CAMERA_LERP * 25.0;                 
+                const lerpFactor = 1.0 - Math.exp( -lerpSpeed * dtRender );
+
+                if (_camSmoothQuat.lengthSq() < 0.1) _camSmoothQuat.copy(player.state.quaternion);
+                _camSmoothQuat.slerp(player.state.quaternion, lerpFactor);
+
+                _camOffset.set(0, CFG.CAMERA_DIST_Y, CFG.CAMERA_DIST_Z).applyQuaternion(_camSmoothQuat);
+                camera.position.copy(player.state.position).add(_camOffset);
+
+                _camLookTarget.set(0, 0, -200).applyQuaternion(player.state.quaternion); 
+                _tempVec3_3.copy(player.state.position).add(_camLookTarget); 
+                camera.lookAt(_tempVec3_3);
+                
+                _planeUp.set(0, 1, 0).applyQuaternion(_camSmoothQuat); 
+                camera.up.copy(_planeUp);
+
+                // FOV Dinâmico
+                const targetFov = CFG.FOV_BASE + (player.state.speed * CFG.FOV_MULTIPLIER);
+                const clampedFov = Math.min(targetFov, 100); 
+                camera.fov += (clampedFov - camera.fov) * (dtRender * 2.0);
+                camera.updateProjectionMatrix();
+
+                // Atualizar HUD
+                document.getElementById('throttle-val').innerText = Math.floor(player.state.throttle * 100) + '%';
+                document.getElementById('speed-val').innerText = Math.floor(player.state.speed);
+                document.getElementById('alt-val').innerText = Math.floor(player.state.position.y);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Iniciar
+        init();
+
+    </script>
+</body>
+</html>

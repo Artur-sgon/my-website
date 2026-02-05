@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S.E.5a - Atmospheric Flight Engine</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+
+        #header-top {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 12px;
+            letter-spacing: 1px;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #header-top a {
+            color: #00ffcc;
+            text-decoration: none;
+            pointer-events: auto;
+            font-weight: bold;
+        }
+        
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px; 
+            left: 50%;
+            transform: translateX(-50%);           
+            color: white;
+            text-align: center;
+            font-size: 14px; 
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border: 1px solid #555;
+            border-radius: 8px;
+            cursor: pointer;
+            pointer-events: auto;
+            max-width: 450px;
+            z-index: 5;
+        }
+        #instructions h1 { font-size: 18px; margin-top: 0; color: #ffffff; }
+        #instructions p { font-size: 13px; line-height: 1.5; }
+
+        #hud-container-bottom-left {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            align-items: flex-end;
+            gap: 15px;
+        }
+        #hud-bottom-left {
+            position: relative; 
+            color: #00ffcc; 
+            font-size: 16px;
+            text-shadow: 1px 1px 2px black; 
+            background: rgba(0, 0, 0, 0.5); 
+            padding: 15px; 
+            border-left: 3px solid #00ffcc;
+        }       
+        .hud-label { opacity: 0.7; font-size: 12px; color: #aaa; }
+        .hud-value { font-weight: bold; font-size: 18px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="header-top">
+            THREE.JS SE5 FLIGHT SIMULATOR - Vibecoded by 
+            <a href="https://github.com/leoawen" target="_blank">"leoawen"</a>
+        </div>
+
+        <div id="instructions">
+            <h1>AIRCRAFT READY</h1>
+            <p style="color: #00ffcc;">Click to Start Flight</p>
+            <p><strong>W / S</strong> - Pitch | <strong>A / D</strong> - Roll</p>
+            <p><strong>Q / E</strong> - Yaw | <strong>Mouse</strong> - Look</p>
+        </div>
+
+        <div id="hud-container-bottom-left">
+            <div id="hud-bottom-left">
+                <div><span class="hud-label">ALTITUDE</span><br><span id="altimeter" class="hud-value">0 m</span></div>
+                <div style="margin-top: 10px;"><span class="hud-label">AIRSPEED</span><br><span id="speedometer" class="hud-value">0 km/h</span></div>
+                <div style="margin-top: 10px;"><span class="hud-label">POSITION (X, Z)</span><br><span id="coords" class="hud-value">0, 0</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/",
+                "lil-gui": "https://unpkg.com/lil-gui@0.19.1/dist/lil-gui.esm.min.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import GUI from 'lil-gui';
+        import Stats from 'three/addons/libs/stats.module.js';
+
+        // =========================================================================================
+        // 1. WORLD CONFIGURATION
+        // =========================================================================================
+        const WORLD_CONFIG = {
+            flight: {
+                cruiseSpeed: 45, // m/s
+                pitchSpeed: 1.2,
+                rollSpeed: 2.2,
+                yawSpeed: 0.8,
+                lerpFactor: 4.0
+            },
+            dimensions: { height: 12000, baseY: 1500 },
+            generation: {
+                resolution: 128,
+                layer1: { repeat: 2, scale: 1.0, seed: 0.0 },
+                layer2: { repeat: 8, scale: 1.0, seed: 0.1 },
+                detail: { resolution: 32, scaleR: 2.0, scaleG: 4.0, scaleB: 8.0, seed: 0.2 },
+                mixStrength: 0.3,
+                coverage: 0.8,
+                erosion: 0.3,
+                contrast: 1.8,
+                fadeCoverageBottom: 0.0,
+                fadeCoverageStart: 0.06,
+                fadeCoverageEnd: 1.0,
+                shapeBase: 0.2,
+                shapeBaseCurve: 0.1,
+                shapeTop: 1.0,
+                opacityBase: 0.12,
+                opacityTop: 0.9,
+            },
+            weather: {
+                enable: true,
+                resolution: 64,
+                repeat: 19.0,
+                poleTilt: 60.0,
+                poleMask: 0.1,
+                heightMax: 15000.0,
+                heightCurve: 0.01,
+                channelR: { seed: 0.3, scale: 11.0, persistence: 0.0, offset: 0.0 },
+                channelG: { enable: false, seed: 0.0, scale: 2.0, persistence: 0.5, offset: 10.0 }
+            },
+            rendering: {
+                densityScale: 1.0, shadowOffset: 500.0, threshold: 0.0, cloudScale: 1.1, globalScaleFactor: 0.00001,
+                baseLodMinDist: 0.0, baseLodMaxDist: 500000.0, baseLodMaxLevel: 4.0,
+                edgeSoftness: 0.2, detailScale: 10.0, erosionStrength: 0.3, lodDistance: 500000.0, popcornMode: true,
+                steps: 48, maxIterations: 400, initialStep: 300.0, stepGrowth: 1.01, spaceSkipRatio: 2.0, maxDistance: 300000.0,
+                absorp: 15.0, skylightAbsorption: 2.0, powderScale: 1.0, powderIntensity: 1.0, phaseIntensity: 2.0, phaseG: 0.6, opacityClamp: 0.99,
+                taa: { resolution: 0.7, blend: 0.6, ghosting: 0.8, distanceCutoff: 100.0 },
+            },
+            animation: {
+                wind3D: { speedX: 0.002, speedY: -0.001, speedZ: 0.001, active: true },
+                weatherRotation: { speedU: -0.00005, speedV: 0.0, active: true }
+            },
+            environment: { sunElevation: 25.0, sunAzimuth: 215.0, sunIntensity: 20.0, exposure: 0.6 },
+            godRays: { intensity: 2.0, density: 1.0, decay: 0.98, weight: 0.1, exposure: 0.15, cloudThreshold: 0.8 },
+            planet: { color: 0x001e36, roughness: 0.5, metalness: 0.1 },
+            physical: {
+                planetRadius: 6371000.0, atmosphereThickness: 100000.0,
+                rayleighCoeff: new THREE.Vector3(5.802e-6, 13.558e-6, 33.100e-6),
+                mieCoeff: new THREE.Vector3(3.996e-6, 3.996e-6, 3.996e-6),
+                ozoneCoeff: new THREE.Vector3(0.650e-6, 1.881e-6, 0.085e-6),
+                rayleighScale: 1.0, mieScale: 1.0, ozoneScale: 1.0,
+                rayleighScaleHeight: 8000.0, mieScaleHeight: 1200.0
+            },
+            debug: { showAtmosphere: false, showPlanet: true }
+        };
+
+        // =========================================================================================
+        // 2. SHADERS (Full Set for the engine to work)
+        // =========================================================================================
+        
+        const CloudGeneratorShader = {
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `
+                precision highp float;
+                varying vec2 vUv;
+                uniform float uSliceZ, uRepeat1, uScale1, uSeed1, uRepeat2, uScale2, uSeed2, uMixStrength, uContrast, uErosion;
+                vec3 hash33(vec3 p) { p = vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6))); return -1.0+2.0*fract(sin(p)*43758.5453123); }
+                vec3 hash33w(vec3 p) { p = vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6))); return fract(sin(p)*43758.5453123); }
+                float periodicNoise(vec3 p, float period) {
+                    vec3 pi=floor(p), pf=fract(p), w=pf*pf*(3.0-2.0*pf);
+                    vec3 p0=mod(pi,period), p1=mod(pi+1.0,period);
+                    float n000=dot(hash33(vec3(p0.x,p0.y,p0.z)),pf), n100=dot(hash33(vec3(p1.x,p0.y,p0.z)),pf-vec3(1,0,0)),
+                          n010=dot(hash33(vec3(p0.x,p1.y,p0.z)),pf-vec3(0,1,0)), n110=dot(hash33(vec3(p1.x,p1.y,p0.z)),pf-vec3(1,1,0)),
+                          n001=dot(hash33(vec3(p0.x,p0.y,p1.z)),pf-vec3(0,0,1)), n101=dot(hash33(vec3(p1.x,p0.y,p1.z)),pf-vec3(1,0,1)),
+                          n011=dot(hash33(vec3(p0.x,p1.y,p1.z)),pf-vec3(0,1,1)), n111=dot(hash33(vec3(p1.x,p1.y,p1.z)),pf-vec3(1,1,1));
+                    return mix(mix(mix(n000,n100,w.x),mix(n010,n110,w.x),w.y),mix(mix(n001,n101,w.x),mix(n011,n111,w.x),w.y),w.z);
+                }
+                float fbmPerlin(vec3 p, float r, float s) { float f=0.0, a=0.5; vec3 cp=p*s; float cp_r=r*s; for(int i=0;i<4;i++){ f+=a*periodicNoise(cp,cp_r); cp*=2.0; cp_r*=2.0; a*=0.5; } return f+0.5; }
+                float worleyNoise(vec3 p, float r) {
+                    vec3 id=floor(p), f=fract(p); float md=1.0;
+                    for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)for(int z=-1;z<=1;z++){
+                        vec3 n=vec3(float(x),float(y),float(z)); vec3 tp=hash33w(mod(id+n,r)+uSeed2*10.0);
+                        float d=length(n+tp-f); md=min(md,d);
+                    } return 1.0-clamp(md,0.0,1.0);
+                }
+                float fbmWorley(vec3 p, float r, float s) { float f=0.0, a=0.5; vec3 cp=p*s; float cp_r=r*s; for(int i=0;i<3;i++){ f+=a*worleyNoise(cp,cp_r); cp*=2.0; cp_r*=2.0; a*=0.5; } return f*0.8; }
+                void main() {
+                    vec3 p1=vec3(vUv.x,uSliceZ,vUv.y)*uRepeat1; float b=fbmPerlin(p1+uSeed1*10.0,uRepeat1,uScale1);
+                    vec3 p2=vec3(vUv.x,uSliceZ,vUv.y)*uRepeat2; float s=fbmWorley(p2,uRepeat2,uScale2);
+                    float fn=mix(b,s,uMixStrength); float f=mix(fn,fn*fn,uErosion);
+                    float d=clamp((uContrast*(f-0.5))+0.5,0.0,1.0); gl_FragColor=vec4(vec3(d),1.0);
+                }
+            `
+        };
+
+        const DetailGeneratorShader = {
+            vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+            fragmentShader: `
+                precision highp float;
+                varying vec2 vUv;
+                uniform float uSliceZ, uScaleR, uScaleG, uScaleB, uSeed;
+                vec3 hash(vec3 p){ p=vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6))); return fract(sin(p)*43758.5453123); }
+                float worley(vec3 p, float f){
+                    vec3 id=floor(p), fr=fract(p); float md=1.0;
+                    for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++)for(int z=-1;z<=1;z++){
+                        vec3 n=vec3(float(x),float(y),float(z)); vec3 pt=hash(mod(id+n,f)+uSeed);
+                        md=min(md,length(n+pt-fr));
+                    } return 1.0-clamp(md,0.0,1.0);
+                }
+                void main(){
+                    vec3 p=vec3(vUv.x,uSliceZ,vUv.y);
+                    gl_FragColor=vec4(worley(p*uScaleR,uScaleR),worley(p*uScaleG,uScaleG),worley(p*uScaleB,uScaleB),1.0);
+                }
+            `
+        };
+
+        const WeatherGeneratorShader = {
+            vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+            fragmentShader: `
+                precision highp float;
+                varying vec2 vUv;
+                uniform float uScaleR, uSeedR, uPersistR, uScaleG, uSeedG, uPersistG;
+                uniform vec2 uOffsetR, uOffsetG;
+                vec3 hash(vec3 p){ p=vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6))); return -1.0+2.0*fract(sin(p)*43758.5453123); }
+                float noise(vec3 p, float per){
+                    vec3 pi=floor(p), pf=fract(p), w=pf*pf*(3.0-2.0*pf);
+                    vec3 p0=mod(pi,per), p1=mod(pi+1.0,per);
+                    float n000=dot(hash(vec3(p0.x,p0.y,p0.z)),pf), n100=dot(hash(vec3(p1.x,p0.y,p0.z)),pf-vec3(1,0,0)),
+                          n010=dot(hash(vec3(p0.x,p1.y,p0.z)),pf-vec3(0,1,0)), n110=dot(hash(vec3(p1.x,p1.y,p0.z)),pf-vec3(1,1,0)),
+                          n001=dot(hash(vec3(p0.x,p0.y,p1.z)),pf-vec3(0,0,1)), n101=dot(hash(vec3(p1.x,p0.y,p1.z)),pf-vec3(1,0,1)),
+                          n011=dot(hash(vec3(p0.x,p1.y,p1.z)),pf-vec3(0,1,1)), n111=dot(hash(vec3(p1.x,p1.y,p1.z)),pf-vec3(1,1,1));
+                    return mix(mix(mix(n000,n100,w.x),mix(n010,n110,w.x),w.y),mix(mix(n001,n101,w.x),mix(n011,n111,w.x),w.y),w.z);
+                }
+                float fbm(vec2 uv, float s, float seed, float p, vec2 o){
+                    float f=0.0, a=0.5; float cur=s; vec3 pos=vec3(uv,seed);
+                    for(int i=0;i<4;i++){ f+=a*noise((pos+vec3(o,0))*cur,cur); cur*=2.0; a*=p; }
+                    return f+0.5;
+                }
+                void main(){
+                    float r=smoothstep(0.2,0.8,fbm(vUv,uScaleR,uSeedR,uPersistR,uOffsetR));
+                    float g=fbm(vUv,uScaleG,uSeedG,uPersistG,uOffsetG);
+                    gl_FragColor=vec4(r,g,0.0,1.0);
+                }
+            `
+        };
+
+        const CloudVolumeShader = {
+            vertexShader: `out vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+            fragmentShader: `
+                precision highp float; precision highp sampler3D;
+                layout(location=0) out vec4 pc_FragColor; layout(location=1) out vec4 pc_FragDepth;
+                varying vec2 vUv;
+                uniform mat4 uInverseViewMatrix, uInverseProjectionMatrix, uPreviousViewProjectionMatrix;
+                uniform vec3 uCameraPos, uSunDirection, uPlanetCenter, uWindOffset, uRayleighCoeff;
+                uniform sampler2D tDepth, tWeatherMap, tPreviousCloud, tBlueNoise;
+                uniform sampler3D uTexture, uDetailTexture;
+                uniform float uLogDepthBufFC, uCloudBaseOffset, uCloudHeight, uDensityScale, uAbsorp, uThreshold, uShadowOffset, uEdgeSoftness, uCloudScale, uGlobalScaleFactor, uDetailScale, uErosionStrength, uLodDistance, uSteps, uMaxIterations, uInitialStep, uStepGrowth, uSpaceSkipRatio, uMaxDistance, uPhaseIntensity, uPhaseG, uOpacityClamp, uCoverage, uCovBottomShape, uCovBottomCurve, uCovTopShape, uCloudBottom, uCloudTop, uFadeCovBottom, uFadeCovStart, uFadeCovEnd, uWeatherRepeat, uWeatherPoleTilt, uWeatherPoleMask, uWeatherHeightMax, uWeatherHeightCurve, uBlendFactor, uGhostingSuppression, uGhostingDistanceCutoff;
+                uniform bool uPopcornMode, uWeatherEnabled, uWeatherGEnabled;
+                
+                float remap(float v, float mnO, float mxO, float mnN, float mxN){ return mnN+(v-mnO)*(mxN-mnN)/(mxO-mnO); }
+                vec3 rotateX(vec3 v, float a){ float s=sin(a), c=cos(a); return vec3(v.x, v.y*c-v.z*s, v.y*s+v.z*c); }
+                vec2 hitSphere(vec3 ro, vec3 rd, vec3 c, float r){
+                    vec3 oc=ro-c; float b=dot(oc,rd), cc=dot(oc,oc)-r*r, h=b*b-cc;
+                    if(h<0.0) return vec2(-1.0); h=sqrt(h); return vec2(-b-h,-b+h);
+                }
+                float hg(float g, float ct){ return (1.0-g*g)/(4.0*3.14159*pow(1.0+g*g-2.0*g*ct,1.5)); }
+                
+                float sampleCloud(vec3 p){
+                    float dC=length(p-uPlanetCenter), alt=dC-6371000.0;
+                    if(alt<uCloudBaseOffset || alt>(uCloudBaseOffset+uCloudHeight)) return 0.0;
+                    vec4 wD=vec4(1.0,0,0,0); float pM=1.0;
+                    if(uWeatherEnabled){
+                        vec3 dir=(p-uPlanetCenter)/dC; vec3 dr=rotateX(dir,uWeatherPoleTilt);
+                        vec2 uv=vec2(atan(dr.z,dr.x)/(2.0*3.14159)+0.5, asin(dr.y)/3.14159+0.5);
+                        wD=texture(tWeatherMap, uv*uWeatherRepeat+uWindOffset.xy*0.1);
+                        pM=1.0-smoothstep(1.0-uWeatherPoleMask,1.0,abs(dr.y));
+                    }
+                    float mC=smoothstep(0.2,0.8,wD.r)*pM; if(mC<=0.01) return 0.0;
+                    float hM=pow(mC,uWeatherHeightCurve), lCH=uWeatherHeightMax*hM, hP=(alt-uCloudBaseOffset)/lCH;
+                    if(hP>1.0) return 0.0;
+                    vec3 nC=((p-uPlanetCenter)*(uGlobalScaleFactor*uCloudScale))+uWindOffset;
+                    float bD=textureLod(uTexture, nC, 0.0).r;
+                    float lS=uCovTopShape, lB=uCovBottomShape;
+                    if(uWeatherGEnabled){ lS=mix(lS,min(1.0,lS+wD.g*0.8),wD.g); lB=mix(lB,lB+wD.g*0.1,wD.g); }
+                    float sB=pow(smoothstep(0.0,lB,hP),uCovBottomCurve), sT=1.0-smoothstep(lS,1.0,hP);
+                    float dCvg=(mC*uCoverage)*smoothstep(0.0,uFadeCovBottom,hP)*(1.0-smoothstep(uFadeCovStart,uFadeCovEnd,hP))*sB*sT;
+                    float d=remap(bD, 1.0-dCvg, 1.0, 0.0, 1.0); if(d<=0.0) return 0.0;
+                    if(d>0.0){
+                        float lF=clamp(distance(p,uCameraPos)/uLodDistance,0.0,1.0);
+                        if(lF<1.0){
+                            vec3 dN=texture(uDetailTexture, nC*uDetailScale).rgb;
+                            float hFF=dN.r*0.625+dN.g*0.25+dN.b*0.125;
+                            d=remap(d, (uPopcornMode?1.0-hFF:hFF)*uErosionStrength*(1.0-lF), 1.0, 0.0, 1.0);
+                        }
+                    }
+                    return d*smoothstep(0.0,uCloudBottom,hP)*(1.0-smoothstep(uCloudTop,1.0,hP));
+                }
+
+                void main(){
+                    vec4 ndc=vec4(vUv*2.0-1.0,1.0,1.0), clp=uInverseProjectionMatrix*ndc, vw=uInverseViewMatrix*(clp/clp.w);
+                    vec3 rd=normalize(vw.xyz-uCameraPos), ro=uCameraPos;
+                    float dL=texture(tDepth,vUv).r;
+                    float gVZ=abs(-1.0*(exp2(dL/(uLogDepthBufFC*0.5))-1.0));
+                    float gD=gVZ/dot(rd,(uInverseViewMatrix*vec4(0,0,-1,0)).xyz);
+                    if(dL>=1.0) gD=1e20;
+                    float rB=6371000.0+uCloudBaseOffset, rT=rB+uCloudHeight;
+                    vec2 hO=hitSphere(ro,rd,uPlanetCenter,rT), hI=hitSphere(ro,rd,uPlanetCenter,rB), hS=hitSphere(ro,rd,uPlanetCenter,6371000.0);
+                    if(hO.y<0.0){ pc_FragColor=vec4(0); pc_FragDepth=vec4(1e20,0,0,1); return; }
+                    float tN=max(0.0,hO.x), tF=min(hO.y,gD);
+                    if(length(ro-uPlanetCenter)<rB && hI.y>0.0) tN=max(tN,hI.y);
+                    if(hS.x>0.0) tF=min(tF,hS.x); tF=min(tF,tN+uMaxDistance);
+                    float t=tN+(uInitialStep*texture(tBlueNoise,gl_FragCoord.xy/256.0).r), cS=uInitialStep;
+                    vec4 cC=vec4(0); float hSt=0.0, wD=0.0, tA=0.0, ph=mix(hg(uPhaseG,dot(rd,uSunDirection)),hg(-0.2,dot(rd,uSunDirection)),0.5);
+                    for(int i=0;i<1024;i++){
+                        if(float(i)>=uMaxIterations || t>=tF || cC.a>=uOpacityClamp) break;
+                        float rD=sampleCloud(ro+rd*t), fD=smoothstep(uThreshold,uThreshold+uEdgeSoftness,rD);
+                        if(fD>0.001){
+                            float sD=sampleCloud(ro+rd*t+uSunDirection*max(cS,uShadowOffset));
+                            vec3 tL=vec3(exp(-sD*uAbsorp)*ph*uPhaseIntensity*20.0)+vec3(0.1,0.2,0.4)*exp(-sD*2.0);
+                            float d=fD*uDensityScale*cS*0.001, sA=1.0-exp(-d), sCt=sA*(1.0-cC.a);
+                            wD+=t*sCt; tA+=sCt; cC.rgb+=tL*sCt; cC.a+=sCt; t+=cS; hSt+=1.0; if(hSt>=uSteps) break;
+                        } else t+=cS*uSpaceSkipRatio;
+                        cS=min(cS*uStepGrowth,3000.0);
+                    }
+                    vec3 wP=ro+rd*((tA>0.01)?(wD/tA):min(gD,tF)); vec4 pCl=uPreviousViewProjectionMatrix*vec4(wP,1.0);
+                    vec2 pU=(pCl.xy/pCl.w)*0.5+0.5;
+                    if(pU.x>0.0&&pU.x<1.0&&pU.y>0.0&&pU.y<1.0) pc_FragColor=mix(cC,texture(tPreviousCloud,pU),min(uBlendFactor,0.97)*(1.0-smoothstep(0.0,uGhostingSuppression,abs(cC.a-texture(tPreviousCloud,pU).a))));
+                    else pc_FragColor=cC;
+                    pc_FragDepth=vec4((tA>0.01)?(wD/tA):gD,0,0,1);
+                }
+            `
+        };
+
+        const FinalCompositorShader = {
+            vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.0); }`,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D tScene, tClouds, tCloudDepth, tDepth, tGodRays, tSunVisibility;
+                uniform float uLogDepthBufFC, uExposure, uSunIntensity, uAtmosphereRadius, uPlanetRadius, uRayleighScaleHeight, uMieScaleHeight;
+                uniform vec3 uSunPhysicalColor, uCameraPos, uSunDirection, uRayleighCoeff, uMieCoeff, uOzoneCoeff, uPlanetCenter;
+                uniform mat4 uInverseProjectionMatrix, uInverseViewMatrix;
+                varying vec2 vUv;
+                vec2 hitSphere(vec3 ro, vec3 rd, vec3 c, float r){
+                    vec3 oc=ro-c; float b=dot(oc,rd), cc=dot(oc,oc)-r*r, h=b*b-cc;
+                    if(h<0.0) return vec2(-1.0); h=sqrt(h); return vec2(-b-h,-b+h);
+                }
+                vec3 getTrans(vec3 p, vec3 ld){
+                    float alt=length(p-uPlanetCenter)-uPlanetRadius;
+                    float ct=clamp(dot(normalize(p-uPlanetCenter),ld),0.0,1.0);
+                    float am=1.0/(ct+0.015*pow(93.885-acos(ct)*57.29,-1.253));
+                    vec3 od=(uRayleighCoeff*exp(-alt/uRayleighScaleHeight)*uRayleighScaleHeight+uMieCoeff*exp(-alt/uMieScaleHeight)*uMieScaleHeight+uOzoneCoeff*max(0.0,1.0-abs(alt-25000.0)/15000.0)*15000.0)*am;
+                    return exp(-od);
+                }
+                vec3 getAtmos(vec3 ro, vec3 rd, float rl, float sv, out vec3 tt){
+                    vec2 atI=hitSphere(ro,rd,uPlanetCenter,uAtmosphereRadius);
+                    if(atI.y<0.0){ tt=vec3(1); return vec3(0); }
+                    float tM=max(0.0,atI.x), tX=min(rl,atI.y);
+                    vec2 pI=hitSphere(ro,rd,uPlanetCenter,uPlanetRadius);
+                    if(pI.x>0.0&&pI.x<tX) tX=pI.x;
+                    if(tX<=tM){ tt=vec3(1); return vec3(0); }
+                    tt=vec3(1); vec3 sc=vec3(0); float phR=(3.0/(16.0*3.14159))*(1.0+pow(dot(rd,uSunDirection),2.0));
+                    float g=0.85, phM=sv*(3.0/(8.0*3.14159))*((1.0-g*g)*(1.0+pow(dot(rd,uSunDirection),2.0)))/((2.0+g*g)*pow(1.0+g*g-2.0*g*dot(rd,uSunDirection),1.5));
+                    for(int i=0;i<16;i++){
+                        float t=tM+(tX-tM)*(float(i)+0.5)/16.0; vec3 p=ro+rd*t; float h=max(0.0,length(p-uPlanetCenter)-uPlanetRadius);
+                        vec3 sigE=uRayleighCoeff*exp(-h/uRayleighScaleHeight)+uMieCoeff*exp(-h/uMieScaleHeight)+uOzoneCoeff*max(0.0,1.0-abs(h-25000.0)/15000.0);
+                        vec3 stepT=exp(-sigE*(tX-tM)/16.0);
+                        sc+=(uRayleighCoeff*exp(-h/uRayleighScaleHeight)*phR+uMieCoeff*exp(-h/uMieScaleHeight)*phM)*getTrans(p,uSunDirection)*tt*(tX-tM)/16.0;
+                        tt*=stepT;
+                    } return sc*uSunIntensity;
+                }
+                void main(){
+                    vec4 scD=texture(tScene,vUv); float d=texture(tDepth,vUv).r, sv=texture(tSunVisibility,vec2(0.5)).r;
+                    vec4 clD=texture(tClouds,vUv); float cDp=texture(tCloudDepth,vUv).r;
+                    vec4 clp=uInverseProjectionMatrix*vec4(vUv*2.0-1.0,1,1); vec3 rd=normalize((uInverseViewMatrix*vec4(clp.xyz,0)).xyz), ro=uCameraPos;
+                    float rl=1e10; if(d<1.0){ float vZ=-1.0*(exp2(d/(uLogDepthBufFC*0.5))-1.0); rl=abs(vZ)/abs(normalize((uInverseProjectionMatrix*vec4(vUv*2.0-1.0,1,1)).xyz).z); }
+                    vec3 tt, atC=getAtmos(ro,rd,rl,sv,tt), fC=atC+(d<1.0?scD.rgb*tt:vec3(0));
+                    if(d>=1.0){ float ct=dot(rd,uSunDirection); fC+=(vec3(smoothstep(0.99985,0.99995,ct))+vec3(pow(max(ct,0.0),9000.0)*0.5))*getTrans(ro,uSunDirection)*uSunIntensity*10.0; }
+                    if(clD.a>0.01 && cDp<rl){ vec3 ctt, cF=getAtmos(ro,rd,cDp,sv,ctt); fC=fC*(1.0-clD.a)+clD.rgb*ctt+cF*clD.a; }
+                    fC+=texture(tGodRays,vUv).rgb*uSunPhysicalColor*2.0*sv;
+                    fC*=uExposure; float a=2.51, b=0.03, c=2.43, d2=0.59, e=0.14;
+                    fC=clamp((fC*(a*fC+b))/(fC*(c*fC+d2)+e),0.0,1.0); gl_FragColor=vec4(pow(fC,vec3(1.0/2.2)),1.0);
+                }
+            `
+        };
+
+        const SunStateShaderFS = `
+            precision highp float;
+            uniform sampler2D tOcclusion, tPreviousState;
+            uniform vec2 uSunPositionScreen;
+            void main(){
+                float pS=texture(tPreviousState,vec2(0.5)).r, tV=0.0;
+                for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++) tV+=texture(tOcclusion,uSunPositionScreen+vec2(x,y)*0.01).r;
+                float nS=pS; if(tV<0.1) nS=0.0; else if(tV>1.0) nS=1.0;
+                gl_FragColor=vec4(mix(pS,nS,0.1),0,0,1);
+            }
+        `;
+
+        // =========================================================================================
+        // 3. ENGINE BOOT & SYSTEMS
+        // =========================================================================================
+        const scene = new THREE.Scene();
+        const clock = new THREE.Clock();
+        const VIRTUAL_CAMERA = { position: new THREE.Vector3(0, 1500, 0), quaternion: new THREE.Quaternion() };
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.5, 20000000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", logarithmicDepthBuffer: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        const stats = new Stats(); stats.dom.style.position='relative'; document.getElementById('hud-container-bottom-left').appendChild(stats.dom);
+        const logDepthBufFC = 2.0 / (Math.log(20000000 + 1.0) / Math.LN2);
+
+        // Aircraft & World Container
+        const worldContainer = new THREE.Group(); scene.add(worldContainer);
+        const aircraftGroup = new THREE.Group(); scene.add(aircraftGroup);
+        const cameraPivot = new THREE.Group(); scene.add(cameraPivot); cameraPivot.add(camera);
+        camera.position.set(0, 1.5, 6);
+
+        // Systems variables
+        let sceneRenderTarget, cloudRenderTargetRead, cloudRenderTargetWrite, cloudMaterial, fsQuadScene, fsQuadCamera;
+        let finalCompositorScene, finalCompositorCamera, finalCompositorMaterial;
+        let occlusionRT, godRaysRT, sunStateRTRead, sunStateRTWrite, occlusionScene, godRaysScene, sunStateScene, occlusionQuad, godRaysQuad, sunStateQuad;
+        let weatherRT, weatherBakeScene, weatherBakeMaterial;
+        let sliceMaterial, detailMaterial;
+        let previousViewProjectionMatrix = new THREE.Matrix4();
+        let frameCounter = 0;
+
+        // Texture Loading
+        const texLoader = new THREE.TextureLoader();
+        const blueNoise = texLoader.load('https://raw.githubusercontent.com/Unity-Technologies/VolumetricLighting/master/Assets/Shaders/BlueNoise.png'); 
+        blueNoise.wrapS = blueNoise.wrapT = THREE.RepeatWrapping;
+
+        // SE5 Loading
+        new GLTFLoader().load("./assets/se5.glb", (gltf) => {
+            const m = gltf.scene; m.rotation.y = Math.PI; aircraftGroup.add(m);
+            console.log("SE5 Loaded");
+        });
+
+        // Planet
+        const pMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 128), new THREE.MeshStandardMaterial({ color: 0x001e36 }));
+        pMesh.scale.setScalar(6371000); pMesh.position.set(0, -6371000, 0); worldContainer.add(pMesh);
+        const dLight = new THREE.DirectionalLight(0xffffff, 1.5); scene.add(dLight);
+
+        // =========================================================================================
+        // 4. CORE ENGINE FUNCTIONS
+        // =========================================================================================
+
+        function bakeCloudTexture() {
+            const res = WORLD_CONFIG.generation.resolution;
+            const data = new Uint8Array(res*res*res);
+            const rt = new THREE.WebGLRenderTarget(res, res);
+            const pb = new Uint8Array(res*res*4);
+            const bSc = new THREE.Scene(), bCm = new THREE.OrthographicCamera(-0.5,0.5,0.5,-0.5,0,1);
+            const bQ = new THREE.Mesh(new THREE.PlaneGeometry(1,1), sliceMaterial); bSc.add(bQ);
+            for(let z=0; z<res; z++){
+                sliceMaterial.uniforms.uSliceZ.value = z/res;
+                renderer.setRenderTarget(rt); renderer.render(bSc, bCm);
+                renderer.readRenderTargetPixels(rt, 0, 0, res, res, pb);
+                for(let i=0; i<res*res; i++) data[z*res*res+i] = pb[i*4];
+            }
+            renderer.setRenderTarget(null); rt.dispose();
+            const tex = new THREE.Data3DTexture(data, res, res, res); tex.format = THREE.RedFormat;
+            tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+            tex.generateMipmaps = true; tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+            tex.needsUpdate = true; cloudMaterial.uniforms.uTexture.value = tex;
+        }
+
+        function bakeDetailTexture() {
+            const res = WORLD_CONFIG.generation.detail.resolution;
+            const data = new Uint8Array(res*res*res*4);
+            const rt = new THREE.WebGLRenderTarget(res, res);
+            const pb = new Uint8Array(res*res*4);
+            const bSc = new THREE.Scene(), bCm = new THREE.OrthographicCamera(-0.5,0.5,0.5,-0.5,0,1);
+            const bQ = new THREE.Mesh(new THREE.PlaneGeometry(1,1), detailMaterial); bSc.add(bQ);
+            for(let z=0; z<res; z++){
+                detailMaterial.uniforms.uSliceZ.value = z/res;
+                renderer.setRenderTarget(rt); renderer.render(bSc, bCm);
+                renderer.readRenderTargetPixels(rt, 0, 0, res, res, pb);
+                for(let i=0; i<res*res; i++){
+                    data[(z*res*res+i)*4] = pb[i*4]; data[(z*res*res+i)*4+1] = pb[i*4+1];
+                    data[(z*res*res+i)*4+2] = pb[i*4+2]; data[(z*res*res+i)*4+3] = 255;
+                }
+            }
+            renderer.setRenderTarget(null); rt.dispose();
+            const tex = new THREE.Data3DTexture(data, res, res, res); tex.format = THREE.RGBAFormat;
+            tex.minFilter = THREE.LinearMipmapLinearFilter; tex.generateMipmaps = true;
+            tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping; tex.needsUpdate = true;
+            cloudMaterial.uniforms.uDetailTexture.value = tex;
+        }
+
+        function initSystems() {
+            const pr = renderer.getPixelRatio();
+            sceneRenderTarget = new THREE.WebGLRenderTarget(window.innerWidth*pr, window.innerHeight*pr, { format: THREE.RGBAFormat, type: THREE.HalfFloatType });
+            sceneRenderTarget.depthTexture = new THREE.DepthTexture(window.innerWidth*pr, window.innerHeight*pr);
+
+            const cw = Math.floor(window.innerWidth*pr*WORLD_CONFIG.rendering.taa.resolution), ch = Math.floor(window.innerHeight*pr*WORLD_CONFIG.rendering.taa.resolution);
+            const createMRT = (w,h) => {
+                const m = new THREE.WebGLMultipleRenderTargets(w,h,2);
+                m.texture[0].format = THREE.RGBAFormat; m.texture[0].type = THREE.HalfFloatType;
+                m.texture[1].format = THREE.RedFormat; m.texture[1].type = THREE.FloatType;
+                return m;
+            };
+            cloudRenderTargetRead = createMRT(cw, ch); cloudRenderTargetWrite = createMRT(cw, ch);
+
+            sliceMaterial = new THREE.ShaderMaterial({ vertexShader: CloudGeneratorShader.vertexShader, fragmentShader: CloudGeneratorShader.fragmentShader, uniforms: { uSliceZ:{value:0}, uRepeat1:{value:2}, uScale1:{value:1}, uSeed1:{value:0}, uRepeat2:{value:8}, uScale2:{value:1}, uSeed2:{value:0.1}, uMixStrength:{value:0.3}, uContrast:{value:1.8}, uErosion:{value:0.3} }});
+            detailMaterial = new THREE.ShaderMaterial({ vertexShader: DetailGeneratorShader.vertexShader, fragmentShader: DetailGeneratorShader.fragmentShader, uniforms: { uSliceZ:{value:0}, uScaleR:{value:2}, uScaleG:{value:4}, uScaleB:{value:8}, uSeed:{value:0.2} }});
+
+            cloudMaterial = new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: CloudVolumeShader.vertexShader, fragmentShader: CloudVolumeShader.fragmentShader, uniforms: {
+                tDepth:{value:null}, tBlueNoise:{value:blueNoise}, uTexture:{value:null}, uDetailTexture:{value:null}, tWeatherMap:{value:null}, tPreviousCloud:{value:null}, uPreviousViewProjectionMatrix:{value:new THREE.Matrix4()},
+                uInverseViewMatrix:{value:new THREE.Matrix4()}, uInverseProjectionMatrix:{value:new THREE.Matrix4()}, uCameraPos:{value:new THREE.Vector3()}, uSunDirection:{value:new THREE.Vector3()}, uPlanetCenter:{value:new THREE.Vector3(0,-6371000,0)},
+                uLogDepthBufFC:{value:logDepthBufFC}, uWindOffset:{value:new THREE.Vector3()}, uCloudBaseOffset:{value:1500}, uCloudHeight:{value:12000}, uDensityScale:{value:1.0}, uAbsorp:{value:15}, uThreshold:{value:0}, uShadowOffset:{value:500}, uEdgeSoftness:{value:0.2},
+                uCloudScale:{value:1.1}, uGlobalScaleFactor:{value:0.00001}, uDetailScale:{value:10}, uErosionStrength:{value:0.3}, uLodDistance:{value:500000}, uPopcornMode:{value:true}, uSteps:{value:48}, uMaxIterations:{value:400}, uInitialStep:{value:300}, uStepGrowth:{value:1.01}, uSpaceSkipRatio:{value:2.0}, uMaxDistance:{value:300000},
+                uPhaseIntensity:{value:2}, uPhaseG:{value:0.6}, uOpacityClamp:{value:0.99}, uCoverage:{value:0.8}, uCovBottomShape:{value:0.2}, uCovBottomCurve:{value:0.1}, uCovTopShape:{value:1.0}, uCloudBottom:{value:0.12}, uCloudTop:{value:0.9}, uFadeCovBottom:{value:0}, uFadeCovStart:{value:0.06}, uFadeCovEnd:{value:1.0},
+                uWeatherEnabled:{value:true}, uWeatherRepeat:{value:19}, uWeatherPoleTilt:{value:1.04}, uWeatherPoleMask:{value:0.1}, uWeatherHeightMax:{value:15000}, uWeatherHeightCurve:{value:0.01}, uBlendFactor:{value:0.6}, uGhostingSuppression:{value:0.8}, uFrame:{value:0}
+            }, depthWrite:false, depthTest:false });
+            fsQuadScene = new THREE.Scene(); fsQuadCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1); fsQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), cloudMaterial));
+
+            finalCompositorMaterial = new THREE.ShaderMaterial({ vertexShader: FinalCompositorShader.vertexShader, fragmentShader: FinalCompositorShader.fragmentShader, uniforms: {
+                tScene:{value:null}, tClouds:{value:null}, tCloudDepth:{value:null}, tDepth:{value:null}, tGodRays:{value:null}, tSunVisibility:{value:null}, uSunPhysicalColor:{value:new THREE.Color()}, uExposure:{value:0.6}, uSunIntensity:{value:20}, uAtmosphereRadius:{value:6471000}, uPlanetRadius:{value:6371000}, uRayleighScaleHeight:{value:8000}, uMieScaleHeight:{value:1200}, uPlanetCenter:{value:new THREE.Vector3(0,-6371000,0)},
+                uRayleighCoeff:{value:WORLD_CONFIG.physical.rayleighCoeff}, uMieCoeff:{value:WORLD_CONFIG.physical.mieCoeff}, uOzoneCoeff:{value:WORLD_CONFIG.physical.ozoneCoeff}, uInverseProjectionMatrix:{value:new THREE.Matrix4()}, uInverseViewMatrix:{value:new THREE.Matrix4()}, uCameraPos:{value:new THREE.Vector3()}, uSunDirection:{value:new THREE.Vector3()}, uLogDepthBufFC:{value:logDepthBufFC}
+            }});
+            finalCompositorScene = new THREE.Scene(); finalCompositorCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1); finalCompositorScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), finalCompositorMaterial));
+
+            occlusionRT = new THREE.WebGLRenderTarget(window.innerWidth/2, window.innerHeight/2);
+            godRaysRT = new THREE.WebGLRenderTarget(window.innerWidth/2, window.innerHeight/2);
+            sunStateRTRead = new THREE.WebGLRenderTarget(1, 1, { format:THREE.RedFormat, type:THREE.FloatType });
+            sunStateRTWrite = new THREE.WebGLRenderTarget(1, 1, { format:THREE.RedFormat, type:THREE.FloatType });
+            occlusionScene = new THREE.Scene(); godRaysScene = new THREE.Scene(); sunStateScene = new THREE.Scene();
+            const grCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1); occlusionQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), new THREE.ShaderMaterial({ vertexShader:`varying vec2 vUv; void main(){vUv=uv; gl_Position=vec4(position,1.0);}`, fragmentShader:`precision highp float; uniform sampler2D tD, tC; uniform vec2 uSun; void main(){ float d=texture(tD,vUv).r, c=texture(tC,vUv).a; float s=1.0-smoothstep(0.02,0.06,length(vUv-uSun)); gl_FragColor=vec4(vec3(s*(d<0.999?0.0:1.0)*(1.0-smoothstep(0.0,0.8,c))),1.0); }`, uniforms:{tD:{value:null},tC:{value:null},uSun:{value:new THREE.Vector2()}} })); occlusionScene.add(occlusionQuad);
+            godRaysQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), new THREE.ShaderMaterial({ vertexShader:`varying vec2 vUv; void main(){vUv=uv; gl_Position=vec4(position,1.0);}`, fragmentShader:`precision highp float; uniform sampler2D tO; uniform vec2 uSun; void main(){ vec2 d=(vUv-uSun)*0.012; vec4 c=vec4(0); vec2 t=vUv; for(int i=0;i<64;i++){ c+=texture(tO,t); t-=d; } gl_FragColor=c*0.1; }`, uniforms:{tO:{value:null},uSun:{value:new THREE.Vector2()}} })); godRaysScene.add(godRaysQuad);
+            sunStateQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), new THREE.ShaderMaterial({ vertexShader:`varying vec2 vUv; void main(){vUv=uv; gl_Position=vec4(position,1.0);}`, fragmentShader:SunStateShaderFS, uniforms:{tOcclusion:{value:null},tPreviousState:{value:null},uSunPositionScreen:{value:new THREE.Vector2()}} })); sunStateScene.add(sunStateQuad);
+
+            weatherRT = new THREE.WebGLRenderTarget(64,64); weatherBakeScene = new THREE.Scene(); weatherBakeMaterial = new THREE.ShaderMaterial({ vertexShader:WeatherGeneratorShader.vertexShader, fragmentShader:WeatherGeneratorShader.fragmentShader, uniforms:{uScaleR:{value:11},uSeedR:{value:0.3},uPersistR:{value:0},uOffsetR:{value:new THREE.Vector2()},uScaleG:{value:2},uSeedG:{value:0},uPersistG:{value:0.5},uOffsetG:{value:new THREE.Vector2(10,0)}}}); weatherBakeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(1,1), weatherBakeMaterial));
+            renderer.setRenderTarget(weatherRT); renderer.render(weatherBakeScene, new THREE.OrthographicCamera(-0.5,0.5,0.5,-0.5,0,1)); renderer.setRenderTarget(null);
+            cloudMaterial.uniforms.tWeatherMap.value = weatherRT.texture;
+        }
+
+        // =========================================================================================
+        // 5. INPUTS & PHYSICS
+        // =========================================================================================
+        const controls = new PointerLockControls(camera, document.body);
+        document.getElementById('instructions').addEventListener('click', () => controls.lock());
+        controls.addEventListener('lock', () => document.getElementById('instructions').style.display='none');
+        controls.addEventListener('unlock', () => document.getElementById('instructions').style.display='block');
+
+        const keys = { w:0, s:0, a:0, d:0, q:0, e:0 };
+        window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = 1; });
+        window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = 0; });
+
+        let p_vel=0, r_vel=0, y_vel=0, airspeed=WORLD_CONFIG.flight.cruiseSpeed;
+        
+        function updatePhysics(dt) {
+            const rot = WORLD_CONFIG.flight;
+            const tP = keys.s - keys.w, tR = keys.a - keys.d, tY = keys.q - keys.e;
+            p_vel = THREE.MathUtils.lerp(p_vel, tP * rot.pitchSpeed, dt * rot.lerpFactor);
+            r_vel = THREE.MathUtils.lerp(r_vel, tR * rot.rollSpeed, dt * rot.lerpFactor);
+            y_vel = THREE.MathUtils.lerp(y_vel, tY * rot.yawSpeed, dt * rot.lerpFactor);
+            aircraftGroup.rotateX(p_vel * dt); aircraftGroup.rotateZ(r_vel * dt); aircraftGroup.rotateY(y_vel * dt);
+            const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(aircraftGroup.quaternion);
+            airspeed -= fwd.y * 15 * dt; airspeed = Math.max(25, Math.min(airspeed, 120));
+            VIRTUAL_CAMERA.position.addScaledVector(fwd, airspeed * dt);
+            cameraPivot.quaternion.slerp(aircraftGroup.quaternion, dt * 6.0);
+        }
+
+        // =========================================================================================
+        // 6. MAIN LOOP
+        // =========================================================================================
+        initSystems(); bakeDetailTexture(); bakeCloudTexture();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1); stats.update(); frameCounter++;
+            if(controls.isLocked) updatePhysics(dt);
+
+            worldContainer.position.set(-VIRTUAL_CAMERA.position.x, -VIRTUAL_CAMERA.position.y, -VIRTUAL_CAMERA.position.z);
+            const relCenter = new THREE.Vector3(0,-6371000,0).sub(VIRTUAL_CAMERA.position);
+            const phi = (90-WORLD_CONFIG.environment.sunElevation)*Math.PI/180, theta = WORLD_CONFIG.environment.sunAzimuth*Math.PI/180;
+            const sDir = new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
+            dLight.position.copy(sDir).multiplyScalar(1e7); dLight.color.setHSL(0.1, 0.5, airspeed/120);
+            const sSc = sDir.clone().project(camera); const sUV = new THREE.Vector2(sSc.x*0.5+0.5, sSc.y*0.5+0.5);
+
+            // Shaders Uniforms
+            if(cloudMaterial){
+                const u = cloudMaterial.uniforms; u.uFrame.value = frameCounter; u.uCameraPos.value.set(0,0,0); u.uPlanetCenter.value.copy(relCenter); u.uSunDirection.value.copy(sDir); u.uWindOffset.value.x += 0.001; u.tDepth.value = sceneRenderTarget.depthTexture; u.tPreviousCloud.value = cloudRenderTargetRead.texture[0]; u.uPreviousViewProjectionMatrix.value.copy(previousViewProjectionMatrix); u.uInverseViewMatrix.value.copy(camera.matrixWorld); u.uInverseProjectionMatrix.value.copy(camera.projectionMatrixInverse);
+            }
+
+            // Passes
+            renderer.setRenderTarget(sceneRenderTarget); renderer.clear(); renderer.render(scene, camera);
+            renderer.setRenderTarget(cloudRenderTargetWrite); renderer.clear(); renderer.render(fsQuadScene, fsQuadCamera);
+            [cloudRenderTargetRead, cloudRenderTargetWrite] = [cloudRenderTargetWrite, cloudRenderTargetRead];
+
+            occlusionQuad.material.uniforms.tD.value = sceneRenderTarget.depthTexture; occlusionQuad.material.uniforms.tC.value = cloudRenderTargetRead.texture[0]; occlusionQuad.material.uniforms.uSun.value.copy(sUV);
+            renderer.setRenderTarget(occlusionRT); renderer.render(occlusionScene, fsQuadCamera);
+            godRaysQuad.material.uniforms.tO.value = occlusionRT.texture; godRaysQuad.material.uniforms.uSun.value.copy(sUV);
+            renderer.setRenderTarget(godRaysRT); renderer.render(godRaysScene, fsQuadCamera);
+            sunStateQuad.material.uniforms.tOcclusion.value = occlusionRT.texture; sunStateQuad.material.uniforms.tPreviousState.value = sunStateRTRead.texture; sunStateQuad.material.uniforms.uSunPositionScreen.value.copy(sUV);
+            renderer.setRenderTarget(sunStateRTWrite); renderer.render(sunStateScene, fsQuadCamera);
+            [sunStateRTRead, sunStateRTWrite] = [sunStateRTWrite, sunStateRTRead];
+
+            if(finalCompositorMaterial){
+                const u = finalCompositorMaterial.uniforms; u.tScene.value=sceneRenderTarget.texture; u.tDepth.value=sceneRenderTarget.depthTexture; u.tClouds.value=cloudRenderTargetRead.texture[0]; u.tCloudDepth.value=cloudRenderTargetRead.texture[1]; u.tGodRays.value=godRaysRT.texture; u.tSunVisibility.value=sunStateRTRead.texture; u.uCameraPos.value.set(0,0,0); u.uPlanetCenter.value.copy(relCenter); u.uSunDirection.value.copy(sDir); u.uInverseViewMatrix.value.copy(camera.matrixWorld); u.uInverseProjectionMatrix.value.copy(camera.projectionMatrixInverse);
+                u.uSunPhysicalColor.value.setHSL(0.1, 0.4, 0.8);
+                renderer.setRenderTarget(null); renderer.render(finalCompositorScene, finalCompositorCamera);
+            }
+
+            previousViewProjectionMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            document.getElementById('altimeter').innerText = Math.round(VIRTUAL_CAMERA.position.y) + " m";
+            document.getElementById('speedometer').innerText = Math.round(airspeed * 3.6) + " km/h";
+            document.getElementById('coords').innerText = Math.round(VIRTUAL_CAMERA.position.x) + ", " + Math.round(VIRTUAL_CAMERA.position.z);
+        }
+        animate();
+    </script>
+</body>
+</html>

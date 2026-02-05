@@ -486,7 +486,7 @@
         };
 
 
-        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v1_textures_1_apache_grass_trees.glb', (gltf) => {
+        loader.load('https://raw.githubusercontent.com/Artur-sgon/my-website/refs/heads/main/vrsd_v4.glb', (gltf) => {
             gltf.scene.traverse(c => { 
                 if(c.isMesh) { 
                     c.material.side = THREE.DoubleSide; 

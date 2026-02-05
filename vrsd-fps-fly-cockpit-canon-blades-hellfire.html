@@ -1,3 +1,5 @@
+--- START OF FILE vrsd-fps-fly-cockpit-canon-blades-hellfire.html ---
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -791,6 +793,8 @@
         }
 
         function update() {
+            if (collisionObjects.length === 0) return; // Prevent fall before environment loads
+            
             const now = Date.now();
             
             // Update the Complex Explosion System
